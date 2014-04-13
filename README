@@ -1,0 +1,5 @@
+Type the following to get Chisel:
+git submodule init
+git submodule update
+
+Type 'make test' to run test cases on example processor
