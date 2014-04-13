@@ -9,4 +9,6 @@ src/*/target/*
 generated/*
 vlsi/build/generated-src/*
 project/target
+simple-hdl/src/target/*
+simple-hdl/target/*
 *.swp
