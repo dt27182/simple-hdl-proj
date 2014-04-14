@@ -12,6 +12,7 @@ abstract class Module(par: Module, name: String) {
   val children = new ArrayBuffer[Module]
   //connections to internal nodes
   val nodes = new ArrayBuffer[Node]
+  val superOps = new ArrayBuffer[SuperOp]
   val inputs = new ArrayBuffer[Node]
   val outputs = new ArrayBuffer[Node]
   val decoupledIOs = new ArrayBuffer[DecoupledIO]
@@ -209,8 +210,20 @@ abstract class Module(par: Module, name: String) {
         case unary: UnOp => {
           outFile.write("  " + unary.consumers(0)._1.gennedName + " := " + unary.chiselOperator + " " + unary.inputs(0).gennedName + "\n")
         }
+        case assign : AssignOp => {
+          outFile.write("  " + assign.consumers(0)._1.gennedName + " := " + assign.inputs(0).gennedName + "\n")
+        }
+        case bitConst: BitConstOp => {
+          Predef.assert(bitConst.width > 0)
+          outFile.write("  " + bitConst.consumers(0)._1.gennedName + " := " + "Bits(" + bitConst.value + ", width = " + bitConst.width + ")\n")
+        }
+        case boolConst: BoolConstOp => {
+          outFile.write("  " + boolConst.consumers(0)._1.gennedName + " := " + "Bool(" + boolConst.value + ")\n")
+        }
         case _ => {}
       }
+    }
+    for(SuperOp <- superOps){
     }
   }
 
