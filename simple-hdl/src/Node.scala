@@ -9,9 +9,12 @@ abstract class Node {
   var module:Module = null
   //chisel code gen info
   var name = ""//base name of node
-  var gennedName = ""//base name with stuff for io access; this is different with different contexts
+  var emissionName = ""//name used for code gen; should be "" until set by the code gen method
   var width = 0
 
   //methods
-  def verify(): Unit
+
+  def verify(): Unit = {
+    Predef.assert(emissionName == "")
+  }
 }

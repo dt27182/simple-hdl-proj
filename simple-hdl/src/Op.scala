@@ -8,6 +8,13 @@ abstract class Op extends Node {
   }
 }
 
+abstract class SimpleOp extends Op {
+}
+
+abstract class MemberOp extends Op {
+  var superOp: SuperOp = null
+}
+
 object ConstOp {
   def construct(name:String = "", width:Int, module: Module = Module.currentModule, constNode: ConstOp): Wire = {
     constNode.module = module
@@ -25,7 +32,7 @@ object ConstOp {
   }
 }
 
-abstract class ConstOp extends Op {
+abstract class ConstOp extends SimpleOp {
   numInputs = 0
 
   override def verify(): Unit = {
@@ -71,7 +78,7 @@ object Assign {
   }
 }
 
-class AssignOp extends Op {
+class AssignOp extends SimpleOp {
   numInputs = 1
   override def verify(): Unit = {
     super.verify
@@ -79,8 +86,8 @@ class AssignOp extends Op {
   }
 }
 
-object UnOp {
-  def construct(input: Wire, name: String = "", module: Module = Module.currentModule, opNode: UnOp): Wire = {
+object UnaryOp {
+  def construct(input: Wire, name: String = "", module: Module = Module.currentModule, opNode: UnaryOp): Wire = {
     opNode.inputs += input
     input.consumers += ((opNode, 0))
     opNode.module = module
@@ -99,7 +106,7 @@ object UnOp {
 
 }
 
-abstract class UnOp extends Op {
+abstract class UnaryOp extends SimpleOp {
   numInputs = 1
   var chiselOperator = ""
 
@@ -112,11 +119,11 @@ abstract class UnOp extends Op {
 object Not {
   def apply(input: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
     val notOp = new NotOp
-    return UnOp.construct(input, name, module, notOp)
+    return UnaryOp.construct(input, name, module, notOp)
   }
 }
 
-class NotOp extends UnOp {
+class NotOp extends UnaryOp {
   chiselOperator = "~"
 }
 
@@ -145,7 +152,7 @@ object BinaryOp {
 
 }
 
-abstract class BinaryOp extends Op {
+abstract class BinaryOp extends SimpleOp {
   numInputs = 2
   var chiselOperator = ""
   

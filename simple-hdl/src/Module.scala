@@ -30,14 +30,16 @@ abstract class Module(par: Module, name: String) {
   //methods
   def addInput(wire:Wire) : Unit = {
     Predef.assert(wire.width != 0)
+    Predef.assert(wire.name != "")
     inputs += wire
   }
   
   def addOutput(wire:Wire) : Unit = {
     Predef.assert(wire.width != 0)
+    Predef.assert(wire.name != "")
     outputs += wire
   }
-
+  
   def className: String = this.getClass.getName.split("""\.""")(1)
   
   def verify(): Unit = {
@@ -75,11 +77,12 @@ abstract class Module(par: Module, name: String) {
 
   def emitChiselSrc(outFile: java.io.FileWriter): Unit = {
     if(!codeGenerator.emittedModules.contains(name)){
+      verify()
+      
       findNonIONodes()
       //name nodes and submodules properly
-      nameUnamedNodes()
-      nameUnamedSubmodules()
-      setNodeGennedNames()
+      nameUnamedCircuitComponents()
+      setEmissionNames()
       //gen code
       emitClassDeclaration(outFile)
       emitIOBundleDeclaration(outFile)
@@ -87,12 +90,14 @@ abstract class Module(par: Module, name: String) {
       emitSubmoduleDeclarations(outFile)
       emitWireConnections(outFile)
       emitCloser(outFile)
+      //reset emissionNames so that verification will pass for submodules when they do their code gen
+      resetEmissionNames()
       //mark this class as emitted so that it does not get code geneed multiple times
       codeGenerator.emittedModules += name
     }
   }
 
-  def nameUnamedNodes():Unit = {
+  def nameUnamedCircuitComponents():Unit = {
     var counter = 0
     for(wire <- nodes.filter(_.isInstanceOf[Wire])){
       if(wire.name == ""){
@@ -100,41 +105,50 @@ abstract class Module(par: Module, name: String) {
         counter = counter + 1
       }
     }
-  }
 
-  def nameUnamedSubmodules():Unit = {
-    var counter = 0
+    counter = 0
     for(submodule <- children){
       if(submodule.instanceName == ""){
         submodule.instanceName = "M" + counter
         counter = counter + 1
       }
     }
+  
+    counter = 0
+    for(superOp <- superOps){
+      if(superOp.name == ""){
+        superOp.name = "SO" + counter
+        counter = counter + 1
+      }
+    }
   }
-
-  def setNodeGennedNames():Unit = {
-    //the names of the IO nodes need to be set differently depending if we are using them from the module they are declared in or if we are using them from the enclosing parent module
+  
+  def setEmissionNames():Unit = {
+    //the emission names of the IO nodes need to be set differently depending if we are using them from the module they are declared in or if we are using them from the enclosing parent module
     for(input <- inputs){
-      input.gennedName = "io." + input.name
+      input.emissionName = "io." + input.name
     }
     for(output <- outputs){
-      output.gennedName = "io." + output.name
+      output.emissionName = "io." + output.name
     }
     for(decoupledIO <- decoupledIOs){
-      decoupledIO.ready.gennedName = "io." + decoupledIO.name + "." + decoupledIO.ready.name
-      decoupledIO.valid.gennedName = "io." + decoupledIO.name + "." + decoupledIO.valid.name
-      decoupledIO.bits.gennedName = "io." + decoupledIO.name + "." + decoupledIO.bits.name
+      decoupledIO.ready.emissionName = "io." + decoupledIO.name + "." + decoupledIO.ready.name
+      decoupledIO.valid.emissionName = "io." + decoupledIO.name + "." + decoupledIO.valid.name
+      decoupledIO.bits.emissionName = "io." + decoupledIO.name + "." + decoupledIO.bits.name
     }
     for(varLatIO <- varLatIOs){
       
     }
     for(submodule <- children){
     }
-    //none IO nodes just have the same name as their original names
+    
+    //non IO nodes just have the same emission name as their original names
     for(node <- nonIONodes){
-      if(node.gennedName == ""){
-        node.gennedName = node.name
-      }
+      node.emissionName = node.name
+    }
+
+    for(reg <- superOps.filter(_.isInstanceOf[Reg])){
+      reg.emissionName = reg.name + "_reg"
     }
   }
 
@@ -181,7 +195,7 @@ abstract class Module(par: Module, name: String) {
 
   def emitWireDeclarations(outFile: java.io.FileWriter):Unit = {
     for(wire <- nonIONodes.filter(_.isInstanceOf[Wire])){
-      var declaration = "  val " + wire.gennedName + " = "
+      var declaration = "  val " + wire.emissionName + " = "
       if(wire.isInstanceOf[Bool]){
         declaration = declaration + "Bool()"
       } else {
@@ -202,32 +216,69 @@ abstract class Module(par: Module, name: String) {
   }
 
   def emitWireConnections(outFile: java.io.FileWriter):Unit = {
-    for(op <- nodes.filter(_.isInstanceOf[Op])){
+    for(op <- nodes.filter(_.isInstanceOf[SimpleOp])){
       op match {
         case binary : BinaryOp => {
-          outFile.write("  " + binary.consumers(0)._1.gennedName + " := " + binary.inputs(0).gennedName + " " + binary.chiselOperator + " " + binary.inputs(1).gennedName + "\n")
+          outFile.write("  " + binary.consumers(0)._1.emissionName + " := " + binary.inputs(0).emissionName + " " + binary.chiselOperator + " " + binary.inputs(1).emissionName + "\n")
         }
-        case unary: UnOp => {
-          outFile.write("  " + unary.consumers(0)._1.gennedName + " := " + unary.chiselOperator + " " + unary.inputs(0).gennedName + "\n")
+        case unary: UnaryOp => {
+          outFile.write("  " + unary.consumers(0)._1.emissionName + " := " + unary.chiselOperator + " " + unary.inputs(0).emissionName + "\n")
         }
         case assign : AssignOp => {
-          outFile.write("  " + assign.consumers(0)._1.gennedName + " := " + assign.inputs(0).gennedName + "\n")
+          outFile.write("  " + assign.consumers(0)._1.emissionName + " := " + assign.inputs(0).emissionName + "\n")
         }
         case bitConst: BitConstOp => {
           Predef.assert(bitConst.width > 0)
-          outFile.write("  " + bitConst.consumers(0)._1.gennedName + " := " + "Bits(" + bitConst.value + ", width = " + bitConst.width + ")\n")
+          outFile.write("  " + bitConst.consumers(0)._1.emissionName + " := " + "Bits(" + bitConst.value + ", width = " + bitConst.width + ")\n")
         }
         case boolConst: BoolConstOp => {
-          outFile.write("  " + boolConst.consumers(0)._1.gennedName + " := " + "Bool(" + boolConst.value + ")\n")
+          outFile.write("  " + boolConst.consumers(0)._1.emissionName + " := " + "Bool(" + boolConst.value + ")\n")
         }
         case _ => {}
       }
     }
-    for(SuperOp <- superOps){
+    for(superOp <- superOps){
+      superOp match {
+        case bitsReg : BitsReg => {
+          //declare register
+          outFile.write("  val " + bitsReg.emissionName + " = Reg(init = Bits(" + bitsReg.init + ", width = " + bitsReg.width + "))\n")
+          //emit register read port connection
+          outFile.write("  " + bitsReg.readPort.consumers(0)._1.emissionName + " := " + bitsReg.emissionName + "\n")
+          //emit register write port connections
+          for(writePort <- bitsReg.writePorts){
+            outFile.write("  when(" + writePort.en.emissionName + "){\n")
+            outFile.write("    " + bitsReg.emissionName + " := " + writePort.data.emissionName + "\n")
+            outFile.write("  }\n")
+          }
+
+        }
+        case boolReg : BoolReg => {
+          //declare register
+          outFile.write("  val " + boolReg.emissionName + " = Reg(init = Bool(" + boolReg.init + "))\n")
+          //emit register read port connection
+          outFile.write("  " + boolReg.readPort.consumers(0)._1.emissionName + " := " + boolReg.emissionName + "\n")
+          //emit register write port connections
+          for(writePort <- boolReg.writePorts){
+            outFile.write("  when(" + writePort.en.emissionName + "){\n")
+            outFile.write("    " + boolReg.emissionName + " := " + writePort.data.emissionName + "\n")
+            outFile.write("  }\n")
+          }
+        }
+        case _ => {}
+      }
     }
   }
 
   def emitCloser(outFile: java.io.FileWriter):Unit = {
     outFile.write("}\n")
+  }
+
+  def resetEmissionNames():Unit = {
+    for(node <- nodes){
+      node.emissionName = ""
+    }
+    for(superOp <- superOps){
+      superOp.emissionName = ""
+    }
   }
 }

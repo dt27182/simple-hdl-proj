@@ -16,4 +16,6 @@ class Wire (_name:String = "", _width:Int = 0, _module:Module = Module.currentMo
   override def verify() : Unit = {
     Predef.assert(inputs.length == 1)
   }
+
+  def getReg: Reg = inputs(0).asInstanceOf[RegRead].superOp.asInstanceOf[Reg]
 }
