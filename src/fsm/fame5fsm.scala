@@ -1,10 +1,10 @@
 package FSM 
  
 import hdl._ 
-import scala.collection.mutable.HashMap
+import scala.collection.mutable._
 import Direction._
 
-class FSM(par: Module = Module.currentModule, name: String = "") extends Module(par, name) {
+class DUT(par: Module = Module.currentModule, name: String = "") extends Module(par, name) {
   //must have this at the beginning of the module declaration
   Module.currentModule = this
   
@@ -16,32 +16,40 @@ class FSM(par: Module = Module.currentModule, name: String = "") extends Module(
   Module.currentModule = parent
 }
 
-class DUT(par: Module = Module.currentModule, name: String = "") extends Module(par, name) {
+class FSM(par: Module = Module.currentModule, name: String = "") extends Module(par, name) {
   //must have this at the begining of the module declaration
   Module.currentModule = this
   //actual code goes here
-  val g = Wire(name = "g", width = 32)
-  val h = Wire(name = "h", width = 32)
-  addInput(g)
-  addOutput(h)
-  val mem_cmd = DecoupledIO("mem_cmd", INPUT, 32)
+  val in0 = Wire(name ="in0", width = 32)
+  val in1 = Wire(name = "in1", width = 32)
+  val out = Wire(name = "out", width = 32)
+  val mem_cmd = DecoupledIO("mem_cmd", OUTPUT, 32)
+  val mem_resp = DecoupledIO("mem_resp", INPUT, 32)
+  val bool_out = Bool(name = "bool_out")
   decoupledIOs += mem_cmd
-  val a = Wire(name = "a",width = 3)
-  val fsm = new FSM()
-  val fsm2 = new FSM(name = "fsm")
-  val b = Wire(name = "b")
-  val c = Plus(a, mem_cmd.bits, "c")
-  val d = Bool(name = "d") 
-  val e = Wire(width = 5)
-  val f = Plus(g, e, "f")
-  Assign(f,h)
-  val i = Not(e, "i")
+  decoupledIOs += mem_resp
+  addInput(in0)
+  addInput(in1)
+  addOutput(out)
+  addOutput(bool_out)
+  val a = Plus(in0, in1, "a")
+  Assign(a, out)
+  Assign(mem_resp.bits, mem_cmd.bits)
+  Assign(mem_resp.valid, mem_cmd.valid)
+  Assign(mem_cmd.ready, mem_resp.ready)
+  val b = Not(mem_cmd.ready, "b")
+  Assign(b, bool_out)
+  val c = BitConst(3, 32, "c")
+  val d = BoolConst(true, "d")
+  //val e_updates = new ArrayBuffer[(Bool, Bool)]
+  //e_updates += ((d, d))
+  //val e = Reg(updates = e_updates, name = "e")
   //must have these at the end of the module declaration 
   Module.currentModule = parent
 }
 
 object test {
   def main(args: Array[String]): Unit = {
-    hdlMain(new DUT, "/home/eecs/wenyu/multithread-transform/simple-hdl-proj/generated/fsm.scala", "FSM")
+    hdlMain(new FSM, "/home/eecs/wenyu/multithread-transform/simple-hdl-proj/generated/fsm.scala", "FSM")
   }
 }
