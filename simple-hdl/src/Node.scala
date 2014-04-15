@@ -15,6 +15,23 @@ abstract class Node {
   //methods
 
   def verify(): Unit = {
+    for(i <- 0 until inputs.length){
+      val input = inputs(i)
+      Predef.assert(input.consumers.map(_._1).contains(this))
+      for((consumer, index) <- input.consumers){
+        if(consumer == this){
+          Predef.assert(index == i)
+        }
+      }
+    }
+    
+    for((consumer, index) <- consumers){
+      Predef.assert(consumer.inputs(index) == this)
+    }
+
+    Predef.assert(module != null)
+    Predef.assert(module.nodes.contains(this))
+
     Predef.assert(emissionName == "")
   }
 }

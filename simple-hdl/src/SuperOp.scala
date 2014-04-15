@@ -7,6 +7,12 @@ abstract class SuperOp {
   var name = ""
   //name used for code generation; should be "" until set by the code gen function
   var emissionName = ""
+
+  def verify(): Unit = {
+    Predef.assert(module != null)
+    Predef.assert(module.superOps.contains(this))
+    Predef.assert(emissionName == "")
+  }
 }
 
 object Reg {
@@ -58,7 +64,14 @@ abstract class Reg extends SuperOp {
     writePort.module = module
     module.nodes += writePort
   }
-
+  
+  override def verify(): Unit = {
+    super.verify()
+    Predef.assert(readPort.superOp == this)
+    for(writePort <- writePorts){
+      Predef.assert(writePort.superOp == this)
+    }
+  }
 }
 
 object BitsReg {
@@ -92,12 +105,21 @@ class BoolReg extends Reg {
 }
 
 class RegRead extends MemberOp {
+  override def verify(): Unit = {
+    super.verify()
+    Predef.assert(superOp.asInstanceOf[Reg].readPort == this)
+  }
 }
 
 class RegWrite extends MemberOp {
   numInputs = 2
   def en = inputs(0)
   def data = inputs(1)
+
+  override def verify(): Unit ={
+    super.verify()
+    Predef.assert(superOp.asInstanceOf[Reg].writePorts.contains(this))
+  }
 }
 
 object Mem {
@@ -170,6 +192,16 @@ abstract class Mem extends SuperOp {
     writePort.module = module
     module.nodes += writePort
   }
+
+  override def verify(): Unit = {
+    super.verify()
+    for(readPort <- readPorts){
+      Predef.assert(readPort.superOp == this)
+    }
+    for(writePort <- writePorts){
+      Predef.assert(writePort.superOp == this)
+    }
+  }
 }
 
 object BitsMem {
@@ -200,6 +232,11 @@ class MemRead extends MemberOp {
   def addr = inputs(0)
   def en = inputs(1)
   def data = consumers(0)._1
+
+  override def verify(): Unit = {
+    super.verify()
+    Predef.assert(superOp.asInstanceOf[Mem].readPorts.contains(this))
+  }
 }
 
 class MemWrite extends MemberOp {
@@ -207,4 +244,9 @@ class MemWrite extends MemberOp {
   def addr = inputs(0)
   def en = inputs(1)
   def data = inputs(2)
+  override def verify(): Unit = {
+    super.verify()
+    Predef.assert(superOp.asInstanceOf[Mem].writePorts.contains(this))
+  }
+
 }

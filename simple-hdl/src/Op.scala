@@ -5,6 +5,7 @@ abstract class Op extends Node {
   var numInputs = 0
   override def verify(): Unit = {
     Predef.assert(inputs.length == numInputs)
+    Predef.assert(consumers.length <= 1, this)
   }
 }
 
@@ -13,6 +14,10 @@ abstract class SimpleOp extends Op {
 
 abstract class MemberOp extends Op {
   var superOp: SuperOp = null
+  override def verify(): Unit = {
+    super.verify()
+    Predef.assert(superOp != null)
+  }
 }
 
 object ConstOp {
@@ -35,10 +40,6 @@ object ConstOp {
 abstract class ConstOp extends SimpleOp {
   numInputs = 0
 
-  override def verify(): Unit = {
-    super.verify
-    Predef.assert(consumers.length == 1)
-  }
 }
 
 object BitsConst {
@@ -81,10 +82,6 @@ object Assign {
 
 class AssignOp extends SimpleOp {
   numInputs = 1
-  override def verify(): Unit = {
-    super.verify
-    Predef.assert(consumers.length == 1)
-  }
 }
 
 object MuxCase {
@@ -130,10 +127,6 @@ object Mux {
 
 class MuxOp extends SimpleOp {
   numInputs = 3
-  override def verify(): Unit = {
-    super.verify
-    Predef.assert(consumers.length == 1)
-  }
   def sel: Node = inputs(0)
   def in1: Node = inputs(1)
   def in0: Node = inputs(2)
@@ -166,12 +159,6 @@ class ExtractOp extends SimpleOp {
   numInputs = 1
   var lowIndex = 0
   var highIndex = 0
-  override def verify(): Unit = {
-    super.verify
-    Predef.assert(consumers.length == 1)
-  }
-
-
 }
 
 object UnaryOp {
@@ -199,8 +186,8 @@ abstract class UnaryOp extends SimpleOp {
   var chiselOperator = ""
 
   override def verify(): Unit = {
-    super.verify
-    Predef.assert(consumers.length == 1)
+    super.verify()
+    Predef.assert(chiselOperator != "")
   }
 }
 
@@ -247,7 +234,6 @@ abstract class BinaryOp extends SimpleOp {
   override def verify(): Unit = {
     super.verify
     Predef.assert(chiselOperator != "")
-    Predef.assert(consumers.length == 1)
   }
 }
 
