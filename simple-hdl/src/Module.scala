@@ -42,12 +42,36 @@ abstract class Module(par: Module, name: String) {
   
   def className: String = this.getClass.getName.split("""\.""")(1)
   
+  def emitChiselSrc(outFile: java.io.FileWriter): Unit = {
+    if(!codeGenerator.emittedModules.contains(name)){
+      verify()
+      
+      findNonIONodes()
+      //name nodes and submodules properly
+      nameUnamedCircuitComponents()
+      setEmissionNames()
+      //gen code
+      emitClassDeclaration(outFile)
+      emitIOBundleDeclaration(outFile)
+      emitWireDeclarations(outFile)
+      emitSubmoduleDeclarations(outFile)
+      emitWireConnections(outFile)
+      emitCloser(outFile)
+      //reset emissionNames so that verification will pass for submodules when they do their code gen
+      resetEmissionNames()
+      //mark this class as emitted so that it does not get code geneed multiple times
+      codeGenerator.emittedModules += name
+    }
+  }
+  
   def verify(): Unit = {
     instanceName != ""
     for(node <- nodes){
+      Predef.assert(node.module == this)
       node.verify()
     }
     for(superOp <- superOps){
+      Predef.assert(superOp.module == this)
       superOp.verify()
     }
   }
@@ -78,28 +102,6 @@ abstract class Module(par: Module, name: String) {
       if(!ioNodes.contains(node)){
         nonIONodes += node
       }
-    }
-  }
-
-  def emitChiselSrc(outFile: java.io.FileWriter): Unit = {
-    if(!codeGenerator.emittedModules.contains(name)){
-      verify()
-      
-      findNonIONodes()
-      //name nodes and submodules properly
-      nameUnamedCircuitComponents()
-      setEmissionNames()
-      //gen code
-      emitClassDeclaration(outFile)
-      emitIOBundleDeclaration(outFile)
-      emitWireDeclarations(outFile)
-      emitSubmoduleDeclarations(outFile)
-      emitWireConnections(outFile)
-      emitCloser(outFile)
-      //reset emissionNames so that verification will pass for submodules when they do their code gen
-      resetEmissionNames()
-      //mark this class as emitted so that it does not get code geneed multiple times
-      codeGenerator.emittedModules += name
     }
   }
 
