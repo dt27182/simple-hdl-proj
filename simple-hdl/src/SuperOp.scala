@@ -100,10 +100,99 @@ class RegWrite extends MemberOp {
   def data = inputs(1)
 }
 
+object Mem {
+  def construct(name: String = "", depth:Int, seqRead: Boolean = false, module: Module = Module.currentModule, mem:Mem): Mem = {
+    mem.depth = depth
+    mem.isSeqRead = seqRead
+    mem.name = name
+    mem.module = module
+    module.superOps += mem
+    return mem
+  }
+}
+
 abstract class Mem extends SuperOp {
   var isSeqRead = false
+  var depth:Int = 0
   val readPorts:ArrayBuffer[MemRead] = new ArrayBuffer[MemRead]
   val writePorts:ArrayBuffer[MemWrite] = new ArrayBuffer[MemWrite]
+
+  def addRead(en: Wire = null, data: Wire, addr: Wire): Unit = {
+    if(isSeqRead){
+      Predef.assert(en != null)
+      Predef.assert(en.isInstanceOf[Bool])
+    }
+    if(this.isInstanceOf[BoolMem]){
+      Predef.assert(data.isInstanceOf[Bool])
+    } else {
+      Predef.assert(!data.isInstanceOf[Bool])
+    }
+    Predef.assert(!addr.isInstanceOf[Bool])
+
+    val readPort = new MemRead
+    readPort.inputs += addr
+    addr.consumers += ((readPort, 0))
+    readPort.inputs += en
+    if(en != null){
+      en.consumers += ((readPort, 1))
+    }
+    Predef.assert(data.inputs.length == 0)
+    data.inputs += readPort
+    readPort.consumers += ((data, 0))
+
+    readPort.superOp = this
+    readPorts += readPort
+    
+    readPort.module = module
+    module.nodes += readPort
+  }
+
+  def addWrite(en:Wire, data: Wire, addr: Wire): Unit = {
+    Predef.assert(en.isInstanceOf[Bool])
+    if(this.isInstanceOf[BoolMem]){
+      Predef.assert(data.isInstanceOf[Bool])
+    } else {
+      Predef.assert(!data.isInstanceOf[Bool])
+    }
+    Predef.assert(!addr.isInstanceOf[Bool])
+
+    val writePort = new MemWrite
+    writePort.inputs += addr
+    addr.consumers += ((writePort, 0))
+    writePort.inputs += en
+    en.consumers += ((writePort, 1))
+    writePort.inputs += data
+    data.consumers += ((writePort, 2))
+
+    writePort.superOp = this
+    writePorts += writePort
+
+    writePort.module = module
+    module.nodes += writePort
+  }
+}
+
+object BitsMem {
+  def apply(name: String = "", depth: Int, width: Int, seqRead: Boolean = false, module: Module = Module.currentModule): Mem = {
+    val bitsMem = new BitsMem
+    bitsMem.width = width
+    return Mem.construct(name, depth, seqRead, module, bitsMem)
+  }
+}
+
+object BoolMem {
+  def apply(name: String = "", depth: Int, seqRead: Boolean = false, module: Module = Module.currentModule): Mem = {
+    val boolMem = new BoolMem
+    return Mem.construct(name, depth, seqRead, module, boolMem)
+  }
+
+}
+
+class BitsMem extends Mem {
+  var width:Int = 0
+}
+
+class BoolMem extends Mem {
 }
 
 class MemRead extends MemberOp {

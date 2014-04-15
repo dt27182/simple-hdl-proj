@@ -37,7 +37,29 @@ class FSM(par: Module = Module.currentModule, name: String = "") extends Module(
   accumulator.getReg.addWrite(accumulator_en, accumulator_in)
 
   Assign(accumulator, out)
+  
+  val mem = BoolMem("mem", 4)
+  val readEn = BoolConst(true, "readEn")
+  val readData = Bool("readData")
+  val readAddr = BitsConst(1, 2, "readAddr")
+  mem.addRead(data = readData, addr = readAddr)
+  val writeEn = BoolConst(true, "writeEn")
+  val writeData = BoolConst(true, "writeData")
+  val writeAddr = BitsConst(1, 2, "writeAddr")
+  mem.addWrite(writeEn, writeData, writeAddr)
 
+  val a = Wire("a")
+  val b = Wire("b")
+  val c = And(a, b, "c")
+  val d = Or(a, b, "d")
+  val e = Xor(a, b, "e")
+  val f = Equal(a, b, "f")
+  val g = NEqual(a, b, "g")
+  val h = SL(a, b, "h")
+  val i = SR(a, b, "i")
+  val j = Mux(readData, a, b, "j")
+  val k = Extract(a, 3, 3, "k")
+  val l = Extract(a, 4, 3, "l")
   //must have these at the end of the module declaration 
   Module.currentModule = parent
 }

@@ -41,7 +41,7 @@ abstract class ConstOp extends SimpleOp {
   }
 }
 
-object BitConst {
+object BitsConst {
   def apply(value:Int, width: Int, name:String = "", module:Module = Module.currentModule): Wire = {
     val bitConst = new BitConstOp(value, width)
     return ConstOp.construct(name, width, module, bitConst)
@@ -73,6 +73,7 @@ object Assign {
     assignOp.module = module
     module.nodes += assignOp
     
+    Predef.assert(output.inputs.length == 0)
     output.inputs += assignOp
     assignOp.consumers += ((output, 0))
   }
@@ -84,6 +85,93 @@ class AssignOp extends SimpleOp {
     super.verify
     Predef.assert(consumers.length == 1)
   }
+}
+
+object MuxCase {
+  def apply(default: Wire, mapping: ArrayBuffer[(Wire, Wire)], name: String = "", module: Module = Module.currentModule): Wire = {
+    var output = default
+    for((en, data) <- mapping){
+      Predef.assert(en.isInstanceOf[Bool])
+      Predef.assert(default.getClass == data.getClass)
+      output = Mux(en, data, output)
+    }
+    return output
+  }
+}
+
+object Mux {
+  def apply(sel: Wire, in1: Wire, in0: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    Predef.assert(sel.isInstanceOf[Bool])
+    Predef.assert(in0.getClass == in1.getClass)
+    
+    val muxOp = new MuxOp
+    muxOp.inputs += sel
+    sel.consumers += ((muxOp, 0))
+    muxOp.inputs += in1
+    in1.consumers += ((muxOp, 1))
+    muxOp.inputs += in0
+    in0.consumers += ((muxOp, 2))
+
+    var output:Wire = null
+    if(in0.isInstanceOf[Bool]){
+      output = new Bool(_name = name, _module = module)
+    } else {
+      output = new Wire(_name = name, _module = module)
+    }
+
+    output.inputs += muxOp
+    muxOp.consumers += ((output, 0))
+
+    muxOp.module = module
+    module.nodes += muxOp
+    return output
+  }
+}
+
+class MuxOp extends SimpleOp {
+  numInputs = 3
+  override def verify(): Unit = {
+    super.verify
+    Predef.assert(consumers.length == 1)
+  }
+  def sel: Node = inputs(0)
+  def in1: Node = inputs(1)
+  def in0: Node = inputs(2)
+}
+
+
+object Extract {
+  def apply(input: Wire, highIndex: Int, lowIndex:Int, name: String = "", module:Module = Module.currentModule): Wire = {
+    Predef.assert(!input.isInstanceOf[Bool])
+    Predef.assert(lowIndex >= 0)
+    Predef.assert(highIndex >= lowIndex)
+    val extractOp = new ExtractOp
+    extractOp.lowIndex = lowIndex
+    extractOp.highIndex = highIndex
+    extractOp.inputs += input
+    input.consumers += ((extractOp, 0))
+    extractOp.module = module
+    module.nodes += extractOp
+
+    val output = new Wire(_name = name, _module = module)
+    output.inputs += extractOp
+    extractOp.consumers += ((output, 0))
+
+    return output
+  }
+
+}
+
+class ExtractOp extends SimpleOp {
+  numInputs = 1
+  var lowIndex = 0
+  var highIndex = 0
+  override def verify(): Unit = {
+    super.verify
+    Predef.assert(consumers.length == 1)
+  }
+
+
 }
 
 object UnaryOp {
@@ -173,4 +261,94 @@ object Plus {
 class PlusOp extends BinaryOp {
   chiselOperator = "+"
 }
-  
+
+object Minus {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new MinusOp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class MinusOp extends BinaryOp {
+  chiselOperator = "-"
+}
+
+object And {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new AndOp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class AndOp extends BinaryOp {
+  chiselOperator = "&"
+}
+
+object Or {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new OrOp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class OrOp extends BinaryOp {
+  chiselOperator = "|"
+}
+
+object Xor {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new XorOp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class XorOp extends BinaryOp {
+  chiselOperator = "^"
+}
+
+object Equal {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new EqualOp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class EqualOp extends BinaryOp {
+  chiselOperator = "==="
+}
+
+object NEqual {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new NEqualOp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class NEqualOp extends BinaryOp {
+  chiselOperator = "!="
+}
+
+object SL {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    Predef.assert(!y.isInstanceOf[Bool])
+    val op = new SLOp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class SLOp extends BinaryOp {
+  chiselOperator = "<<"
+}
+
+object SR {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    Predef.assert(!y.isInstanceOf[Bool])
+    val op = new SROp
+    return BinaryOp.construct(x, y, name, module, op)
+  }
+}
+
+class SROp extends BinaryOp {
+  chiselOperator = ">>"
+}
+

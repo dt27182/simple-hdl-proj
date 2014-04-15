@@ -150,6 +150,10 @@ abstract class Module(par: Module, name: String) {
     for(reg <- superOps.filter(_.isInstanceOf[Reg])){
       reg.emissionName = reg.name + "_reg"
     }
+
+    for(mem <- superOps.filter(_.isInstanceOf[Mem])){
+      mem.emissionName = mem.name
+    }
   }
 
   def emitClassDeclaration(outFile: java.io.FileWriter):Unit = {
@@ -227,6 +231,12 @@ abstract class Module(par: Module, name: String) {
         case assign : AssignOp => {
           outFile.write("  " + assign.consumers(0)._1.emissionName + " := " + assign.inputs(0).emissionName + "\n")
         }
+        case mux : MuxOp => {
+          outFile.write("  " + mux.consumers(0)._1.emissionName + " := Mux(" + mux.sel.emissionName + ", " + mux.in1.emissionName + ", " + mux.in0.emissionName + ")\n")
+        }
+        case extract : ExtractOp => {
+          outFile.write("  " + extract.consumers(0)._1.emissionName + " := " + extract.inputs(0).emissionName + "(" + extract.highIndex + ", " + extract.lowIndex + ")\n")
+        }
         case bitConst: BitConstOp => {
           Predef.assert(bitConst.width > 0)
           outFile.write("  " + bitConst.consumers(0)._1.emissionName + " := " + "Bits(" + bitConst.value + ", width = " + bitConst.width + ")\n")
@@ -263,6 +273,37 @@ abstract class Module(par: Module, name: String) {
             outFile.write("    " + boolReg.emissionName + " := " + writePort.data.emissionName + "\n")
             outFile.write("  }\n")
           }
+        }
+        case bitsMem : BitsMem => {
+          //declare mem
+          outFile.write("  val " + bitsMem.emissionName + " = Mem(Bits(width = " + bitsMem.width + "), " + bitsMem.depth + ")\n")
+          //emit read ports
+          Predef.assert(!bitsMem.isSeqRead)//implement sequential mem emission later
+          for(readPort <- bitsMem.readPorts){
+            outFile.write("  " + readPort.data.emissionName + " := " + bitsMem.emissionName + ".read(" + readPort.addr.emissionName + ")\n") 
+          }
+          //emit write ports
+          for(writePort <- bitsMem.writePorts){
+            outFile.write("  when(" + writePort.en.emissionName + "){\n")
+            outFile.write("    " + bitsMem.emissionName + ".write(" + writePort.addr.emissionName + ", " + writePort.data.emissionName + ")\n")
+            outFile.write("  }\n")
+          }
+        }
+        case boolMem : BoolMem => {
+          //declare mem
+          outFile.write("  val " + boolMem.emissionName + " = Mem(Bool(), " + boolMem.depth + ")\n")
+          //emit read ports
+          Predef.assert(!boolMem.isSeqRead)//implement sequential mem emission later
+          for(readPort <- boolMem.readPorts){
+            outFile.write("  " + readPort.data.emissionName + " := " + boolMem.emissionName + ".read(" + readPort.addr.emissionName + ")\n") 
+          }
+          //emit write ports
+          for(writePort <- boolMem.writePorts){
+            outFile.write("  when(" + writePort.en.emissionName + "){\n")
+            outFile.write("    " + boolMem.emissionName + ".write(" + writePort.addr.emissionName + ", " + writePort.data.emissionName + ")\n")
+            outFile.write("  }\n")
+          }
+
         }
         case _ => {}
       }
