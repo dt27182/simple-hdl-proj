@@ -66,6 +66,6 @@ class FSM(par: Module = Module.currentModule, name: String = "") extends Module(
 
 object test {
   def main(args: Array[String]): Unit = {
-    hdlMain(new FSM, "/home/eecs/wenyu/multithread-transform/simple-hdl-proj/generated/fsm.scala", "FSM")
+    hdlMain(new FSM(name="top"), "/home/eecs/wenyu/multithread-transform/simple-hdl-proj/generated/fsm.scala", "FSM")
   }
 }

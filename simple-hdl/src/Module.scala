@@ -8,6 +8,7 @@ object Module {
 
 abstract class Module(par: Module, name: String) {
   //connections to module hierarchy
+  var isTop = false
   var parent:Module = null
   val children = new ArrayBuffer[Module]
   //connections to internal nodes
@@ -45,7 +46,6 @@ abstract class Module(par: Module, name: String) {
   def emitChiselSrc(outFile: java.io.FileWriter): Unit = {
     if(!codeGenerator.emittedModules.contains(name)){
       verify()
-      
       findNonIONodes()
       //name nodes and submodules properly
       nameUnamedCircuitComponents()
@@ -59,13 +59,19 @@ abstract class Module(par: Module, name: String) {
       emitCloser(outFile)
       //reset emissionNames so that verification will pass for submodules when they do their code gen
       resetEmissionNames()
-      //mark this class as emitted so that it does not get code geneed multiple times
+      //mark this class as emitted so that it does not get code genned multiple times
       codeGenerator.emittedModules += name
     }
   }
   
   def verify(): Unit = {
-    instanceName != ""
+    Predef.assert(instanceName != "")
+    for(submodule <- children){
+      Predef.assert(submodule.parent == this)
+    }
+    if(!isTop){
+      Predef.assert(parent.children.contains(this))
+    }
     for(node <- nodes){
       Predef.assert(node.module == this)
       node.verify()

@@ -4,8 +4,17 @@ import scala.collection.mutable._
 abstract class Op extends Node {
   var numInputs = 0
   override def verify(): Unit = {
+    super.verify()
     Predef.assert(inputs.length == numInputs)
-    Predef.assert(consumers.length <= 1, this)
+    Predef.assert(consumers.length <= 1)
+    for(input <- inputs){
+      if(input != null){
+        Predef.assert(input.isInstanceOf[Wire])
+      }
+    }
+    for((consumer, index) <- consumers){
+      Predef.assert(consumer.isInstanceOf[Wire])
+    }
   }
 }
 

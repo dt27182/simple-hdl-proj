@@ -17,10 +17,12 @@ abstract class Node {
   def verify(): Unit = {
     for(i <- 0 until inputs.length){
       val input = inputs(i)
-      Predef.assert(input.consumers.map(_._1).contains(this))
-      for((consumer, index) <- input.consumers){
-        if(consumer == this){
-          Predef.assert(index == i)
+      if(input != null){
+        Predef.assert(input.consumers.map(_._1).contains(this))
+        for((consumer, index) <- input.consumers){
+          if(consumer == this){
+            Predef.assert(index == i)
+          }
         }
       }
     }
