@@ -205,7 +205,7 @@ abstract class Mem extends SuperOp {
 }
 
 object BitsMem {
-  def apply(name: String = "", depth: Int, width: Int, seqRead: Boolean = false, module: Module = Module.currentModule): Mem = {
+  def apply(depth: Int, width: Int, seqRead: Boolean = false, name: String = "", module: Module = Module.currentModule): Mem = {
     val bitsMem = new BitsMem
     bitsMem.width = width
     return Mem.construct(name, depth, seqRead, module, bitsMem)
@@ -213,7 +213,7 @@ object BitsMem {
 }
 
 object BoolMem {
-  def apply(name: String = "", depth: Int, seqRead: Boolean = false, module: Module = Module.currentModule): Mem = {
+  def apply(depth: Int, seqRead: Boolean = false, name: String = "", module: Module = Module.currentModule): Mem = {
     val boolMem = new BoolMem
     return Mem.construct(name, depth, seqRead, module, boolMem)
   }

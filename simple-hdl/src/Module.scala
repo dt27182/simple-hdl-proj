@@ -12,8 +12,8 @@ abstract class Module(par: Module, name: String) {
   var parent:Module = null
   val children = new ArrayBuffer[Module]
   //connections to internal nodes
-  val nodes = new HashSet[Node]
-  val superOps = new HashSet[SuperOp]
+  val nodes = new ArrayBuffer[Node]
+  val superOps = new ArrayBuffer[SuperOp]
   val inputs = new ArrayBuffer[Node]
   val outputs = new ArrayBuffer[Node]
   val decoupledIOs = new ArrayBuffer[DecoupledIO]

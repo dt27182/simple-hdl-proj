@@ -268,61 +268,6 @@ class MinusOp extends BinaryOp {
   chiselOperator = "-"
 }
 
-object And {
-  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
-    val op = new AndOp
-    return BinaryOp.construct(x, y, name, module, op)
-  }
-}
-
-class AndOp extends BinaryOp {
-  chiselOperator = "&"
-}
-
-object Or {
-  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
-    val op = new OrOp
-    return BinaryOp.construct(x, y, name, module, op)
-  }
-}
-
-class OrOp extends BinaryOp {
-  chiselOperator = "|"
-}
-
-object Xor {
-  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
-    val op = new XorOp
-    return BinaryOp.construct(x, y, name, module, op)
-  }
-}
-
-class XorOp extends BinaryOp {
-  chiselOperator = "^"
-}
-
-object Equal {
-  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
-    val op = new EqualOp
-    return BinaryOp.construct(x, y, name, module, op)
-  }
-}
-
-class EqualOp extends BinaryOp {
-  chiselOperator = "==="
-}
-
-object NEqual {
-  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
-    val op = new NEqualOp
-    return BinaryOp.construct(x, y, name, module, op)
-  }
-}
-
-class NEqualOp extends BinaryOp {
-  chiselOperator = "!="
-}
-
 object SL {
   def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
     Predef.assert(!y.isInstanceOf[Bool])
@@ -347,3 +292,76 @@ class SROp extends BinaryOp {
   chiselOperator = ">>"
 }
 
+
+object BooleanOp {
+  def construct(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule, opNode: BinaryOp): Wire = {
+    Predef.assert(x.getClass == y.getClass)
+    
+    opNode.inputs += x
+    x.consumers += ((opNode, 0))
+    opNode.inputs += y
+    y.consumers += ((opNode, 1))
+    opNode.module = module
+    module.nodes += opNode
+
+    val output = new Bool(_name = name, _module = module)
+    output.inputs += opNode
+    opNode.consumers += ((output, 0))
+    return output
+  }
+}
+
+object And {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new AndOp
+    return BooleanOp.construct(x, y, name, module, op)
+  }
+}
+
+class AndOp extends BinaryOp {
+  chiselOperator = "&"
+}
+
+object Or {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new OrOp
+    return BooleanOp.construct(x, y, name, module, op)
+  }
+}
+
+class OrOp extends BinaryOp {
+  chiselOperator = "|"
+}
+
+object Xor {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new XorOp
+    return BooleanOp.construct(x, y, name, module, op)
+  }
+}
+
+class XorOp extends BinaryOp {
+  chiselOperator = "^"
+}
+
+object Equal {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new EqualOp
+    return BooleanOp.construct(x, y, name, module, op)
+  }
+}
+
+class EqualOp extends BinaryOp {
+  chiselOperator = "==="
+}
+
+object NEqual {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new NEqualOp
+    return BooleanOp.construct(x, y, name, module, op)
+  }
+}
+
+class NEqualOp extends BinaryOp {
+  chiselOperator = "!="
+}
