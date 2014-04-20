@@ -12,7 +12,8 @@ object codeGenerator {
 
   def emitHeader(packageName: String, outFile: java.io.FileWriter): Unit = {
     outFile.write("package " + packageName +"\n")
-    outFile.write("import Chisel._")
+    outFile.write("import Chisel._\n")
+    outFile.write("import Common._\n")
   }
 
   def emitModule(module: Module, outFile: java.io.FileWriter): Unit = {

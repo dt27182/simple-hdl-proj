@@ -74,6 +74,8 @@ class TransactionMemDUT(par: Module = Module.currentModule, name: String = "") e
   decoupledIOs += addr_in
   decoupledIOs += data_out
   
+  val icache = VarLatIO("icache", 32, 32)
+  varLatIOs += icache
   //body
   val mem = BitsMem(4, 32, name = "mem")
    

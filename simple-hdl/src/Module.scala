@@ -151,7 +151,14 @@ abstract class Module(par: Module, name: String) {
       decoupledIO.bits.emissionName = "io." + decoupledIO.name + "." + decoupledIO.bits.name
     }
     for(varLatIO <- varLatIOs){
-      
+      varLatIO.req.ready.emissionName = "io." + varLatIO.name + ".req.ready"
+      varLatIO.req.valid.emissionName = "io." + varLatIO.name + ".req.valid"
+      varLatIO.req.bits.emissionName = "io." + varLatIO.name + ".req.bits"
+    
+      varLatIO.resp.ready.emissionName = "io." + varLatIO.name + ".resp.ready"
+      varLatIO.resp.valid.emissionName = "io." + varLatIO.name + ".resp.valid"
+      varLatIO.resp.bits.emissionName = "io." + varLatIO.name + ".resp.bits"
+      varLatIO.respPending.emissionName = "io." + varLatIO.name + ".respPending"
     }
     for(submodule <- children){
     }
@@ -207,6 +214,7 @@ abstract class Module(par: Module, name: String) {
       
     }
     for(varLatIO <- varLatIOs){
+      outFile.write("    var " + varLatIO.name + " = new VarLatIO(" + varLatIO.req.bits.width + ", " + varLatIO.resp.bits.width + ")\n")
     }
     outFile.write("  }\n")
   }
