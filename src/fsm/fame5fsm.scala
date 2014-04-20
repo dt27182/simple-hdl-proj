@@ -2,7 +2,7 @@ package FSM
  
 import hdl._ 
 import scala.collection.mutable._
-import Direction._
+import IODirection._
 
 class DUT(par: Module = Module.currentModule, name: String = "") extends Module(par, name) {
   //must have this at the beginning of the module declaration

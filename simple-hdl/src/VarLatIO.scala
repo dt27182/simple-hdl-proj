@@ -1,6 +1,6 @@
 package hdl
 import scala.collection.mutable._
-import Direction._
+import IODirection._
 
 object VarLatIO {
   def apply(name:String, reqWidth:Int, respWidth:Int, module:Module = Module.currentModule):VarLatIO = {

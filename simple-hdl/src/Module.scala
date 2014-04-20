@@ -1,6 +1,6 @@
 package hdl
 import scala.collection.mutable._
-import Direction._
+import IODirection._
 
 object Module {
   var currentModule:Module = null
