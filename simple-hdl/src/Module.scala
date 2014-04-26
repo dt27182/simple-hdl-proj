@@ -80,6 +80,34 @@ abstract class Module(par: Module, name: String) {
       Predef.assert(superOp.module == this)
       superOp.verify()
     }
+    
+    //verify IOs
+    for(input <- inputs){
+      Predef.assert(input.inputs.length == 0)
+    }
+    for(output <- outputs){
+      Predef.assert(output.consumers.length == 0)
+    }
+    for(decoupledIO <- decoupledIOs){
+      if(decoupledIO.dir == INPUT){
+        Predef.assert(decoupledIO.ready.consumers.length == 0)
+        Predef.assert(decoupledIO.valid.inputs.length == 0)
+        Predef.assert(decoupledIO.bits.inputs.length == 0)
+      } else {
+        Predef.assert(decoupledIO.ready.inputs.length == 0)
+        Predef.assert(decoupledIO.valid.consumers.length == 0)
+        Predef.assert(decoupledIO.bits.consumers.length == 0)
+      }
+    }
+    for(varLatIO <- varLatIOs){
+      Predef.assert(varLatIO.respPending.inputs.length == 0)
+      Predef.assert(varLatIO.req.ready.inputs.length == 0)
+      Predef.assert(varLatIO.req.valid.consumers.length == 0)
+      Predef.assert(varLatIO.req.bits.consumers.length == 0)
+      Predef.assert(varLatIO.resp.ready.consumers.length == 0)
+      Predef.assert(varLatIO.resp.valid.inputs.length == 0)
+      Predef.assert(varLatIO.resp.bits.inputs.length == 0)
+    }
   }
 
   def findNonIONodes(): Unit = {
@@ -103,6 +131,7 @@ abstract class Module(par: Module, name: String) {
       ioNodes += varLatIO.resp.ready
       ioNodes += varLatIO.resp.valid
       ioNodes += varLatIO.resp.bits
+      ioNodes += varLatIO.respPending
     }
     for(node <- nodes){
       if(!ioNodes.contains(node)){
@@ -265,6 +294,14 @@ abstract class Module(par: Module, name: String) {
         }
         case boolConst: BoolConstOp => {
           outFile.write("  " + boolConst.consumers(0)._1.emissionName + " := " + "Bool(" + boolConst.value + ")\n")
+        }
+        case cat: CatOp => {
+          var output = "  " + cat.consumers(0)._1.emissionName + " := Cat(" + cat.inputs(0).emissionName
+          for(i <- 1 until cat.inputs.length){
+            output = output + ", " + cat.inputs(i).emissionName
+          }
+          output = output + ")\n"
+          outFile.write(output)
         }
         case _ => {}
       }

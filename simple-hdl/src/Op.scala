@@ -75,7 +75,7 @@ class BoolConstOp(_value: Boolean) extends ConstOp {
 }
 
 object Assign {
-  def apply(input: Wire, output: Wire, module: Module = Module.currentModule) = {
+  def apply(output: Wire, input: Wire, module: Module = Module.currentModule) = {
     Predef.assert(input.getClass == output.getClass)
     val assignOp = new AssignOp
     assignOp.inputs += input
@@ -168,6 +168,29 @@ class ExtractOp extends SimpleOp {
   numInputs = 1
   var lowIndex = 0
   var highIndex = 0
+}
+
+object Cat {
+  def apply(inputs: ArrayBuffer[Wire], name: String = "", module:Module = Module.currentModule): Wire = {
+    val catOp = new CatOp
+    catOp.numInputs = inputs.length
+    for(i <- 0 until inputs.length){
+      val input = inputs(i)
+      catOp.inputs += input
+      input.consumers += ((catOp, i))
+    }
+    catOp.module = module
+    module.nodes += catOp
+
+    val output = new Wire(_name = name, _module = module)
+    output.inputs += catOp
+    catOp.consumers += ((output, 0))
+
+    return output
+  }
+}
+
+class CatOp extends SimpleOp {
 }
 
 object UnaryOp {
@@ -364,4 +387,29 @@ object NEqual {
 
 class NEqualOp extends BinaryOp {
   chiselOperator = "!="
+}
+
+object GT {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new GTOp
+    return BooleanOp.construct(x, y, name, module, op)
+  }
+
+}
+
+class GTOp extends BinaryOp {
+  chiselOperator = ">"
+}
+
+
+object LT {
+  def apply(x: Wire, y: Wire, name: String = "", module: Module = Module.currentModule): Wire = {
+    val op = new LTOp
+    return BooleanOp.construct(x, y, name, module, op)
+  }
+
+}
+
+class LTOp extends BinaryOp {
+  chiselOperator = "<"
 }
