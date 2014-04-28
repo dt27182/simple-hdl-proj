@@ -16,8 +16,6 @@ object autoPipeline {
   var userAnnotatedStages = new HashMap[Node, Int]()
   
   //node orgranization variables
-  var PipelineComponentNodes: ArrayBuffer[Node] = null
-  var PipelineComponentSuperOps: ArrayBuffer[SuperOp] = null 
   var ArchitecturalRegs: ArrayBuffer[Reg] = null
   var ArchitecturalMems: ArrayBuffer[Mem] = null
   var ioNodes: ArrayBuffer[DecoupledIO] = null
@@ -38,6 +36,8 @@ object autoPipeline {
   var autoSinkNodes: ArrayBuffer[AutoNode] = null
   
   //logic generation variables
+  var nodeToStageMap: HashMap[Node, Int] = null
+  
   var pipelineLength = 0
   var pipelineRegs = new HashMap[Int, ArrayBuffer[Reg]]()
   var globalStall: Bool = null  
@@ -131,12 +131,19 @@ object autoPipeline {
     verifyLegalStageColoring()
     optimizeRegisterPlacement()
     verifyLegalStageColoring()
-    
+    insertPipelineRegisters()
+
     autoNodeGraph = null
     autoSourceNodes = null
     autoSinkNodes = null
     
     //find pipeline hazards and generate hazard resolution logic
+
+    //fix up node graph to pass verify in code gen
+    insertAssignOpsBetweenWires(top)
+
+    //verify that our generated node graph is legal
+    top.verify()
   }
   
   def verifyInitialNodeGraph[T <: Module] (top: T) : Unit = {
@@ -157,42 +164,20 @@ object autoPipeline {
 
   def gatherSpecialNodes[T <: Module] (top: T) : Unit = {
     println("gathering special nodes")
-    PipelineComponentNodes = new ArrayBuffer[Node]
-    PipelineComponentSuperOps = new ArrayBuffer[SuperOp]
     ArchitecturalRegs = new ArrayBuffer[Reg]
     ArchitecturalMems = new ArrayBuffer[Mem]
     ioNodes = new ArrayBuffer[DecoupledIO]
     VarLatIOs = new ArrayBuffer[VarLatIO]
     
-    def registerNodes(module: Module): Unit = {
-      for(node <- module.nodes){
-        PipelineComponentNodes += node
-      }
-      for(childModule <- module.children){
-        registerNodes(childModule)
-      }
-    }
-    registerNodes(top)
-    
-    def registerSuperOps(module: Module): Unit = {
-      for(superOp <- module.superOps){
-        PipelineComponentSuperOps += superOp
-      }
-      for(childModule <- module.children){
-        registerSuperOps(childModule)
-      }
-    }
-    registerSuperOps(top)
-
     //mark architectural registers
-    for(superOp <- PipelineComponentSuperOps){
+    for(superOp <- top.superOps){
       if (superOp.isInstanceOf[Reg]) {
         ArchitecturalRegs += superOp.asInstanceOf[Reg]
       }
     }
     
     //mark architecural mems
-    for(superOp <- PipelineComponentSuperOps){
+    for(superOp <- top.superOps){
       if (superOp.isInstanceOf[Mem]) {
         ArchitecturalMems += superOp.asInstanceOf[Mem]
       }
@@ -1070,4 +1055,111 @@ object autoPipeline {
     outFile.write("}\n")
     outFile.close
   }
+
+  def insertPipelineRegisters() : Unit = {
+    var nameCounter = 0
+    nodeToStageMap = new HashMap[Node, Int]
+    
+    for(wire <- autoNodeGraph.filter(_.isInstanceOf[AutoWire]).map(_.asInstanceOf[AutoWire])){
+      if(wire.inputStage != wire.outputStage){
+        val stageDifference = wire.outputStage - wire.inputStage
+        Predef.assert(stageDifference > 0, stageDifference)
+        val originalName = wire.consumerChiselNode.name
+        var currentChiselNode = insertWireOnInput(wire.consumerChiselNode, wire.consumerChiselNodeInputNum)
+        nodeToStageMap(currentChiselNode) = Math.min(wire.inputStage, wire.outputStage)
+        for(i <- 0 until stageDifference){
+          currentChiselNode = insertRegister(currentChiselNode, "Stage_" + (Math.min(wire.inputStage,wire.outputStage) + i) + "_" + "PipeReg_"+ nameCounter + originalName)
+          nodeToStageMap(currentChiselNode) = wire.inputStage + i + 1
+          nodeToStageMap(currentChiselNode.getReg.readPort) = wire.inputStage + i + 1
+          Predef.assert(currentChiselNode.getReg.writePorts.length == 1)
+          nodeToStageMap(currentChiselNode.getReg.writePorts(0)) = wire.inputStage + i
+          nameCounter = nameCounter + 1
+          pipelineRegs(Math.min(wire.inputStage, wire.outputStage) + i) += currentChiselNode.getReg
+        }
+      }
+    }
+    
+    for(node <- autoNodeGraph.filter(_.isInstanceOf[AutoLogic])){
+      for(inputChiselNode <- node.asInstanceOf[AutoLogic].inputChiselNodes){
+        nodeToStageMap(inputChiselNode) = node.inputStage
+      }
+      for(outputChiselNode <- node.asInstanceOf[AutoLogic].outputChiselNodes){
+        nodeToStageMap(outputChiselNode) = node.outputStage
+      }
+    }
+  }
+
+  //insert additional bit node between *output* and its input specified by *inputNum*
+  def insertWireOnInput[T <: Node](output: T, inputNum: Int): Wire = {
+    var newWire:Wire = null
+    val input = output.inputs(inputNum)
+    if(output.isInstanceOf[Op]){
+      if(input.isInstanceOf[Bool]){
+        newWire = Bool(module = input.module)
+      } else {
+        newWire = Wire(module = input.module)
+      }
+    } else {
+      if(output.isInstanceOf[Bool]){
+        newWire = Bool(module = output.module)
+      } else {
+        newWire = Wire(module = output.module)
+      }
+    }
+    
+    for(i <- 0 until input.consumers.size){
+      val inputConsumer = input.consumers(i)._1
+      val inputConsumerInputIndex = input.consumers(i)._2
+      if(inputConsumer == output && inputConsumerInputIndex == inputNum){
+        input.consumers(i) = ((newWire, 0))
+        output.inputs(inputNum) = newWire
+        newWire.inputs += input
+        newWire.consumers += ((output,inputConsumerInputIndex))
+      }
+    }
+    return newWire
+  }
+
+  //inserts register between *input* and its consumers
+  def insertRegister[T <: Wire] (input: T, name: String) : Wire = {
+    var newRegOutput: Wire = null
+    if(input.isInstanceOf[Bool]){
+      newRegOutput = BoolReg(false, name, input.module)
+    } else {
+      newRegOutput = BitsReg(1, name = name, module = input.module)
+    }
+    
+    for(i <- 0 until input.consumers.size){
+      val consumer = input.consumers(i)._1
+      val consumerInputIndex = input.consumers(i)._2
+      consumer.inputs(consumerInputIndex) = newRegOutput
+      newRegOutput.consumers += ((consumer, consumerInputIndex))
+    }
+    input.consumers.clear()
+    newRegOutput.getReg.addWrite(BoolConst(true, module = input.module), input)
+    return newRegOutput
+  }
+  
+  def insertAssignOpsBetweenWires[T <: Module](top: T) : Unit = {
+    for(node <- top.nodes.filter(_.isInstanceOf[Wire])){
+      if(node.inputs.length == 1 && node.inputs(0).isInstanceOf[Wire]){
+        Predef.assert(node.inputs(0).getClass == node.getClass)
+        val assignOp = new AssignOp
+        assignOp.inputs += node.inputs(0)
+        for(i <-0 until node.inputs(0).consumers.length){
+          val consumer = node.inputs(0).consumers(i)._1
+          if(consumer == node){
+            node.inputs(0).consumers(i) = ((assignOp, 0))
+          }
+        }
+
+        assignOp.module = top
+        top.nodes += assignOp
+
+        node.inputs(0) = assignOp
+        assignOp.consumers += ((node, 0))
+      }
+    }
+  }
+
 }

@@ -1,8 +1,13 @@
 run:
 	sbt "project fsm" "run" 
 
+run-cpu:
+	sbt "project cpu" "run" 
+
 clean:
 	sbt "project fsm" clean
+	sbt "project cpu" clean
+	rm -f generated/*.scala
 	rm -f emulator/*.cpp
 	rm -f emulator/*.h
 	rm -f emulator/*.o

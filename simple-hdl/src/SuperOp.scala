@@ -75,7 +75,7 @@ abstract class Reg extends SuperOp {
 }
 
 object BitsReg {
-  def apply(init:Int = 0, width:Int, name: String = "", module: Module = Module.currentModule): Wire = {
+  def apply(init:Int = 0, width:Int= 0 , name: String = "", module: Module = Module.currentModule): Wire = {
     var bitsReg = new BitsReg
     bitsReg.init = init
     bitsReg.width = width

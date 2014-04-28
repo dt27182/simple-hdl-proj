@@ -310,7 +310,12 @@ abstract class Module(par: Module, name: String) {
       superOp match {
         case bitsReg : BitsReg => {
           //declare register
-          outFile.write("  val " + bitsReg.emissionName + " = Reg(init = Bits(" + bitsReg.init + ", width = " + bitsReg.width + "))\n")
+          var output = "  val " + bitsReg.emissionName + " = Reg(init = Bits(" + bitsReg.init 
+          if(bitsReg.width > 0){
+            output = output + ", width = " + bitsReg.width
+          }
+          output = output + "))\n"
+          outFile.write(output)
           //emit register read port connection
           outFile.write("  " + bitsReg.readPort.consumers(0)._1.emissionName + " := " + bitsReg.emissionName + "\n")
           //emit register write port connections
