@@ -144,6 +144,7 @@ abstract class Mem extends SuperOp {
       Predef.assert(en != null)
       Predef.assert(en.isInstanceOf[Bool])
     }
+
     if(this.isInstanceOf[BoolMem]){
       Predef.assert(data.isInstanceOf[Bool])
     } else {
@@ -154,10 +155,15 @@ abstract class Mem extends SuperOp {
     val readPort = new MemRead
     readPort.inputs += addr
     addr.consumers += ((readPort, 0))
-    readPort.inputs += en
     if(en != null){
+      readPort.inputs += en
       en.consumers += ((readPort, 1))
+    } else {
+      val trueNode = BoolConst(true, module = addr.module)
+      readPort.inputs += trueNode
+      trueNode.consumers += ((readPort, 1))
     }
+    
     Predef.assert(data.inputs.length == 0)
     data.inputs += readPort
     readPort.consumers += ((data, 0))

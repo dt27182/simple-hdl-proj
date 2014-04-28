@@ -6,4 +6,5 @@ import Keys._
 object BuildSettings extends Build {
   lazy val simplehdl = Project("hdl", file("simple-hdl/src"))
   lazy val fsm = Project("fsm", file("src/fsm")).dependsOn(simplehdl)
+  lazy val cpu = Project("cpu", file("src/cpu")).dependsOn(simplehdl)
 }

@@ -21,7 +21,7 @@ abstract class AutoNode {
   var outputStage = -1
   var propagatedTo = false
   var isUserAnnotated = false
-  var isAutoAnnotated = false
+  //var isAutoAnnotated = false
   val inputs = new ArrayBuffer[AutoNode]
   val consumers = new ArrayBuffer[AutoNode]
   override def toString() : String = {
@@ -45,7 +45,7 @@ abstract class AutoNode {
       propagatedTo = true
     }
   }
-  def findStageAuto(node: Node, annotatedStages: HashMap[Node, Int]) = {
+  /*def findStageAuto(node: Node, annotatedStages: HashMap[Node, Int]) = {
     if(annotatedStages.contains(node)){
       if(stages.isEmpty){
         stages += annotatedStages(node)
@@ -59,7 +59,7 @@ abstract class AutoNode {
       }
       propagatedTo = true
     }
-  }
+  }*/
   
   //direction == FORWARD means we are propagating a stage to this node from one of its inputs; direction == BACKWARD means we are propagating a stage to this node from one its consumers
   def propagateStage(stage: Int, direction: Direction) = {
