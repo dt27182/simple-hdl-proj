@@ -16,6 +16,7 @@ object autoPipeline {
   var userAnnotatedStages = new HashMap[Node, Int]()
   
   //node orgranization variables
+  var top: Module = null
   var ArchitecturalRegs: ArrayBuffer[Reg] = null
   var ArchitecturalMems: ArrayBuffer[Mem] = null
   var ioNodes: ArrayBuffer[DecoupledIO] = null
@@ -35,9 +36,13 @@ object autoPipeline {
   var autoSourceNodes: ArrayBuffer[AutoNode] = null
   var autoSinkNodes: ArrayBuffer[AutoNode] = null
   
+  
   //logic generation variables
   var nodeToStageMap: HashMap[Node, Int] = null
   
+  val regRAWHazards = new HashMap[(RegRead, RegWrite, Int), Bool] //map of (reg read, reg write, write stage) -> RAW signal
+  val memRAWHazards = new HashMap[(MemRead, MemWrite, Int), Bool] //map of (mem read, mem write, write stage) -> RAW signal 
+
   var pipelineLength = 0
   var pipelineRegs = new HashMap[Int, ArrayBuffer[Reg]]()
   var globalStall: Bool = null  
@@ -64,6 +69,27 @@ object autoPipeline {
     return requireStageSet.contains(node)
   }
   
+  def getStage(n: Node): Int = {
+    if (nodeToStageMap.contains(n))
+      return nodeToStageMap(n)
+    else if(!requireStage(n))
+      return -1
+    else
+      Predef.assert(false, "node does not have astage number: " + n)
+      return -2
+  }
+  
+  //checks if n is a user defined pipeline register
+  def isPipeLineReg(reg: Reg): Boolean = {
+    var result = false
+    for(regArray <- pipelineRegs.values){
+      if(regArray.contains(reg)){
+        result = true
+      }
+    }
+    result
+  }
+    
   //frontend specification methods
   def setStageNum(num: Int) = {
     autoAnnotate = true
@@ -116,18 +142,18 @@ object autoPipeline {
   }
   
   //transform methods
-  def apply[T <: Module] (top: T) : Unit = {
+  def apply[T <: Module] (_top: T) : Unit = {
     //parse in pipelining specification
-    verifyInitialNodeGraph(top)
-    gatherSpecialNodes(top)
+    top = _top
+    verifyInitialNodeGraph()
+    gatherSpecialNodes()
     autoAnnotateStages()
     setPipelineLength(userAnnotatedStages.map(_._2).max + 1)
     
     //find pipeline register placement and insert pipeline registers
     findNodesRequireStage()
-    createAutoNodeGraph(top)
+    createAutoNodeGraph()
     propagateStages()
-    visualizeAutoLogicGraph(autoNodeGraph, "stages.gv")
     verifyLegalStageColoring()
     optimizeRegisterPlacement()
     verifyLegalStageColoring()
@@ -138,15 +164,15 @@ object autoPipeline {
     autoSinkNodes = null
     
     //find pipeline hazards and generate hazard resolution logic
-
+    generateRAWHazardSignals()
     //fix up node graph to pass verify in code gen
-    insertAssignOpsBetweenWires(top)
+    insertAssignOpsBetweenWires()
 
-    //verify that our generated node graph is legal
-    top.verify()
-  }
-  
-  def verifyInitialNodeGraph[T <: Module] (top: T) : Unit = {
+  //verify that our generated node graph is legal
+  top.verify()
+}
+
+def verifyInitialNodeGraph() : Unit = {
     Predef.assert(top.inputs.length == 0)
     Predef.assert(top.outputs.length == 0)
     for(decoupledIO <- top.decoupledIOs){
@@ -162,7 +188,7 @@ object autoPipeline {
     }
   }
 
-  def gatherSpecialNodes[T <: Module] (top: T) : Unit = {
+  def gatherSpecialNodes () : Unit = {
     println("gathering special nodes")
     ArchitecturalRegs = new ArrayBuffer[Reg]
     ArchitecturalMems = new ArrayBuffer[Mem]
@@ -253,26 +279,23 @@ object autoPipeline {
     }
   }
 
-  def setPipelineLength(length: Int) = {
+  def setPipelineLength (length: Int) = {
     pipelineLength = length
     for (i <- 0 until pipelineLength - 1) {
       pipelineRegs += (i -> new ArrayBuffer[Reg]())
     }
-    /*for (i <- 0 until pipelineLength) {
-      val valid = Bool()
+    for (i <- 0 until pipelineLength) {
+      val valid = Bool("PipeStage_Valid_" + i, top)
       stageValids += valid
-      valid.nameIt("PipeStage_Valid_" + i)
     }
     for (i <- 0 until pipelineLength) {
-      val stall = Bool()
+      val stall = Bool("PipeStage_Stall_" + i, top)
       stageStalls += stall
-      stall.nameIt("PipeStage_Stall_" + i)
     }
     for (i <- 0 until pipelineLength) {
-      val kill = Bool()
+      val kill = Bool("PipeStage_Kill_" + i, top)
       stageKills += kill
-      kill.nameIt("PipeStage_Kill_" + i)
-    }*/
+    }
   }
   def findNodesRequireStage() : Unit = {
     //mark nodes reachable from sourceNodes through the consumer pointer as requiring a stage number
@@ -303,7 +326,7 @@ object autoPipeline {
     }
   }
 
-  def createAutoNodeGraph[T <: Module] (top: T) : Unit = {
+  def createAutoNodeGraph() : Unit = {
     val nodeToAutoNodeMap = new HashMap[Node, AutoNode]
     autoNodeGraph = new ArrayBuffer[AutoNode]
     autoSourceNodes = new ArrayBuffer[AutoNode]
@@ -1140,7 +1163,134 @@ object autoPipeline {
     return newRegOutput
   }
   
-  def insertAssignOpsBetweenWires[T <: Module](top: T) : Unit = {
+  def generateRAWHazardSignals() = {
+    println("searching for hazards...")
+    
+    // handshaking stalls from variable latency components; stall entire pipe when data is not readyfor now
+    /*globalStall = Bool(false)
+    for (variableLatencyComponent <- VariableLatencyComponents) {
+      val stall = variableLatencyComponent.io.req.valid && (!variableLatencyComponent.req_ready || !variableLatencyComponent.resp_valid)
+      globalStall = globalStall || stall
+    }*/
+
+    // raw stalls
+    var raw_counter = 0
+    for (reg <- ArchitecturalRegs) {
+      val readStage = getStage(reg.readPort)
+      for (writePort <- reg.writePorts){
+        val writeEn = writePort.en
+        val writeData = writePort.data
+        val writeStage = Math.max(getStage(writeEn), getStage(writeData))
+        Predef.assert(writeStage > -1, "both writeEn and writeData are literals")
+        val prevWriteEns = getVersions(writeEn.asInstanceOf[Wire], writeStage - readStage + 1)
+        if (writeStage > readStage) {
+          for(stage <- readStage + 1 until writeStage + 1) {
+            var currentStageWriteEnable: Bool = null 
+            if(-(stage - writeStage)  < prevWriteEns.length){
+              currentStageWriteEnable = Bool(module = top)
+              currentStageWriteEnable.inputs += prevWriteEns(-(stage - writeStage) )
+              prevWriteEns(- (stage - writeStage) ).consumers += ((currentStageWriteEnable, 0))
+            } else {
+              currentStageWriteEnable = BoolConst(true, module = top).asInstanceOf[Bool]
+            }
+            regRAWHazards(((reg.readPort, writePort, stage))) = And(stageValids(stage), currentStageWriteEnable, "hazard_num" + raw_counter + "_" + reg.name + "_" + stage + "_" + writeEn.name, top).asInstanceOf[Bool]
+            raw_counter = raw_counter + 1
+          }
+        }
+      }
+    }
+    
+    // FunMem hazards
+    for (mem <- ArchitecturalMems) {
+      for(writePort <- mem.writePorts){
+        val writeAddr = writePort.addr
+        val writeEn = writePort.en
+        val writeData = writePort.data
+        val writeStage = Math.max(getStage(writeEn),Math.max(getStage(writeAddr), getStage(writeData)))
+        Predef.assert(writeStage > -1)
+        for(readPort <- mem.readPorts){
+          val readAddr = readPort.addr
+          val readData = readPort.data
+          val readEn = readPort.en
+          val readStage = Math.max(getStage(readAddr), getStage(readEn))
+          Predef.assert(readStage > -1)
+          val writeEnables = getVersions(writeEn.asInstanceOf[Wire], writeStage - readStage + 1)
+          val writeAddrs = getVersions(writeAddr.asInstanceOf[Wire], writeStage - readStage + 1)
+          if(writeStage > readStage){
+            for(stage <- readStage + 1 until writeStage + 1){
+              var currentStageWriteEnable:Bool = null
+              var currentStageWriteAddr:Wire = null
+              if(-(stage - writeStage)  < writeEnables.length){
+                currentStageWriteEnable = Bool(module = top)
+                currentStageWriteEnable.inputs += writeEnables(-(stage - writeStage) )
+                writeEnables(-(stage - writeStage) ).consumers += ((currentStageWriteEnable, 0))
+              } else {
+                currentStageWriteEnable = BoolConst(true, module = top).asInstanceOf[Bool]
+              }
+              if(-(stage - writeStage)  < writeAddrs.length){
+                currentStageWriteAddr = Wire(module = top)
+                currentStageWriteAddr.inputs += writeAddrs(-(stage - writeStage) )
+                writeAddrs(-(stage - writeStage) ).consumers += ((currentStageWriteAddr, 0))
+              } else {
+                currentStageWriteAddr = readAddr.asInstanceOf[Wire]
+              }
+              memRAWHazards(((readPort, writePort, stage))) = And(stageValids(stage), And(currentStageWriteEnable, And(readEn.asInstanceOf[Bool], Equal(readAddr.asInstanceOf[Wire], currentStageWriteAddr, module = top), module = top), module = top) , name = "hazard_num" + raw_counter + "_" + mem.name + "readNum_" + mem.readPorts.indexOf(readPort) + "_"+ stage + "_" + "writeNum_" + mem.writePorts.indexOf(writePort), module = top).asInstanceOf[Bool]
+              
+              raw_counter = raw_counter + 1
+            }
+          }
+        }
+      }
+    }
+  }
+   
+  def getVersions(wire: Wire, maxLen: Int): ArrayBuffer[Wire] = {
+    val result = new ArrayBuffer[Wire]//stage of node decreases as the array index increases; includes original node
+    var currentWire:Node = wire
+    result += currentWire.asInstanceOf[Wire]
+    Predef.assert(currentWire.inputs.length == 1)
+    while(currentWire.inputs(0).isInstanceOf[Wire] || currentWire.inputs(0).isInstanceOf[AssignOp] || (currentWire.inputs(0).isInstanceOf[RegRead] && isPipeLineReg(currentWire.asInstanceOf[Wire].getReg))){
+      if(currentWire.inputs(0).isInstanceOf[RegRead] && isPipeLineReg(currentWire.asInstanceOf[Wire].getReg)){
+        Predef.assert(currentWire.asInstanceOf[Wire].getReg.writePorts.length == 1)
+        currentWire = currentWire.asInstanceOf[Wire].getReg.writePorts(0).data
+        result += currentWire.asInstanceOf[Wire]
+      } else {
+        currentWire = currentWire.inputs(0)
+      }
+      Predef.assert(currentWire.inputs.length == 1)
+    }
+    
+    if(!requireStage(currentWire)){
+      for(i <- result.length until maxLen){
+        result += currentWire.asInstanceOf[Wire]
+      }
+    }
+
+    /*
+    if(!requireStage(currentWire)){
+      for(i <- 0 until maxLen){
+        result += currentWire
+      }
+    } else {
+      while(currentWire.inputs.length == 1 && !currentWire.inputs(0).isInstanceOf[Op]){
+        if(currentWire.inputs(0).isInstanceOf[Reg]){
+          if(!isPipeLineReg(currentWire)){
+            if(result.length < maxLen) result += currentWire
+          } else {
+            if(result.length < maxLen) result += currentWire
+            return result
+          }
+          currentWire = currentWire.inputs(0).asInstanceOf[Reg].updates(0)._2
+        } else {
+          currentWire = currentWire.inputs(0)
+        } 
+      }
+      if(result.length < maxLen) result += currentWire
+    }*/
+    result
+  }
+ 
+  def insertAssignOpsBetweenWires() : Unit = {
     for(node <- top.nodes.filter(_.isInstanceOf[Wire])){
       if(node.inputs.length == 1 && node.inputs(0).isInstanceOf[Wire]){
         Predef.assert(node.inputs(0).getClass == node.getClass)
