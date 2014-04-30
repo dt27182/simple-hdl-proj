@@ -12,3 +12,4 @@ project/target
 simple-hdl/src/target/*
 simple-hdl/target/*
 *.swp
+*.swo

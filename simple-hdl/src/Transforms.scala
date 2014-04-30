@@ -42,14 +42,21 @@ object autoPipeline {
   
   val regRAWHazards = new HashMap[(RegRead, RegWrite, Int), Bool] //map of (reg read, reg write, write stage) -> RAW signal
   val memRAWHazards = new HashMap[(MemRead, MemWrite, Int), Bool] //map of (mem read, mem write, write stage) -> RAW signal 
+  
+  val decoupledIOBusySignals = new HashMap[(DecoupledIO, Int), Bool]//map of (DecoupledIO, DecoupledIO stage) -> IO busy signal
+  val varLatIOBusySignals = new HashMap[(VarLatIO, DecoupledIO, Int), Bool]//map of (VarLatIO, resp/req DecoupledIO, VarLatIO stage) -> IO busy signal
 
   var pipelineLength = 0
   var pipelineRegs = new HashMap[Int, ArrayBuffer[Reg]]()
   var globalStall: Bool = null  
-  val stageValids = new ArrayBuffer[Bool]
-  val stageStalls = new ArrayBuffer[Bool]
-  val stageKills = new ArrayBuffer[Bool]
-  
+
+  val stageValids = new ArrayBuffer[Bool]//the bool at index i is the valid signal of stage i
+  val prevStageValidRegs = new ArrayBuffer[Bool]//the bool at index i is the registered version of the valid signal of stage i
+  val stageStalls = new ArrayBuffer[Bool]//the bool at index i is the stall signal of stage i aka the signal that determines if the contents of stage i should move forward to stage i + 1
+  val stageKills = new ArrayBuffer[Bool]//the bool at index i is the kill signal of stage i
+  val stageNoRAWSignals = new ArrayBuffer[Bool]
+  val stageNoIOBusySignals = new ArrayBuffer[Bool]
+
   //helper methods
   def isSource(node: Node) =  {
     regReadPorts.contains(node) || inputNodes.contains(node)
@@ -165,14 +172,22 @@ object autoPipeline {
     
     //find pipeline hazards and generate hazard resolution logic
     generateRAWHazardSignals()
+    generateIOBusySignals()
+    generateStageNoRAWSignals()
+    generateStageNoIOBusySignals()
+    generateStageValidSignals()
+    generateStageStallSignals()
+    connectStageValidsToConsumers()
+    connectStageStallsToConsumers()
+    
     //fix up node graph to pass verify in code gen
     insertAssignOpsBetweenWires()
 
-  //verify that our generated node graph is legal
-  top.verify()
-}
+    //verify that our generated node graph is legal
+    top.verify()
+  }
 
-def verifyInitialNodeGraph() : Unit = {
+  def verifyInitialNodeGraph() : Unit = {
     Predef.assert(top.inputs.length == 0)
     Predef.assert(top.outputs.length == 0)
     for(decoupledIO <- top.decoupledIOs){
@@ -284,17 +299,37 @@ def verifyInitialNodeGraph() : Unit = {
     for (i <- 0 until pipelineLength - 1) {
       pipelineRegs += (i -> new ArrayBuffer[Reg]())
     }
+    
     for (i <- 0 until pipelineLength) {
       val valid = Bool("PipeStage_Valid_" + i, top)
       stageValids += valid
     }
+
+    prevStageValidRegs += BoolConst(true, module = top).asInstanceOf[Bool]
+    for (i <- 1 until pipelineLength) {
+      val validReg = BoolReg(false, "Stage_" + i + "_valid_reg", top)
+      validReg.getReg.addWrite(BoolConst(true, module = top), stageValids(i - 1))
+      prevStageValidRegs += validReg.asInstanceOf[Bool]
+    }
+    
     for (i <- 0 until pipelineLength) {
       val stall = Bool("PipeStage_Stall_" + i, top)
       stageStalls += stall
     }
+    
     for (i <- 0 until pipelineLength) {
       val kill = Bool("PipeStage_Kill_" + i, top)
       stageKills += kill
+    }
+    
+    for (i <- 0 until pipelineLength) {
+      val noRAW = Bool("PipeStage_NoRAW_" + i, top)
+      stageNoRAWSignals += noRAW
+    }
+    
+    for (i <- 0 until pipelineLength) {
+      val noIOBusy = Bool("PipeStage_NoIOBusy_" + i, top)
+      stageNoIOBusySignals += noIOBusy
     }
   }
   def findNodesRequireStage() : Unit = {
@@ -1265,31 +1300,269 @@ def verifyInitialNodeGraph() : Unit = {
         result += currentWire.asInstanceOf[Wire]
       }
     }
+    return result
+  }
+  
+  def generateIOBusySignals(): Unit = {
+    for(decoupledIO <- ioNodes){
+      val stage = getStage(decoupledIO.bits)
+      Predef.assert(stage > -1)
+      if(decoupledIO.dir == INPUT){
+        val readyInput = insertWireOnInput(decoupledIO.ready, 0) 
+        decoupledIOBusySignals(((decoupledIO, stage))) = And(Not(decoupledIO.valid.asInstanceOf[Bool], module = top), readyInput, name = decoupledIO.name + "_busy", module = top).asInstanceOf[Bool]
+      } else {
+        val validInput = insertWireOnInput(decoupledIO.valid, 0)
+        decoupledIOBusySignals(((decoupledIO, stage))) = And(validInput, Not(decoupledIO.ready.asInstanceOf[Bool], module = top), name = decoupledIO.name + "_busy", module = top).asInstanceOf[Bool]
 
-    /*
-    if(!requireStage(currentWire)){
-      for(i <- 0 until maxLen){
-        result += currentWire
       }
-    } else {
-      while(currentWire.inputs.length == 1 && !currentWire.inputs(0).isInstanceOf[Op]){
-        if(currentWire.inputs(0).isInstanceOf[Reg]){
-          if(!isPipeLineReg(currentWire)){
-            if(result.length < maxLen) result += currentWire
-          } else {
-            if(result.length < maxLen) result += currentWire
-            return result
-          }
-          currentWire = currentWire.inputs(0).asInstanceOf[Reg].updates(0)._2
-        } else {
-          currentWire = currentWire.inputs(0)
-        } 
+    }
+    for(varLatIO <- VarLatIOs){
+      val stage = getStage(varLatIO.req.bits)
+      Predef.assert(stage > -1)
+      
+      //generate IO busy signal for resp side
+      val respReadyInput = insertWireOnInput(varLatIO.resp.ready, 0)
+      varLatIOBusySignals(((varLatIO, varLatIO.resp, stage))) = And (Not(varLatIO.resp.valid.asInstanceOf[Bool], module = top), respReadyInput , name = varLatIO.name + "_resp_busy", module = top).asInstanceOf[Bool]
+
+      //generate IO busy signal for req side
+      val reqValidInput = insertWireOnInput(varLatIO.req.valid, 0)
+      varLatIOBusySignals(((varLatIO, varLatIO.req, stage))) = And (Not(varLatIO.req.ready.asInstanceOf[Bool], module = top), reqValidInput , name = varLatIO.name + "_req_busy", module = top).asInstanceOf[Bool]
+    }
+  }
+  
+  def generateStageNoRAWSignals(): Unit = {
+    //sort RAW hazard signals by stage
+    val RAWHazardSignals = new ArrayBuffer[ArrayBuffer[Bool]]
+    for(i <- 0 until pipelineLength){
+      RAWHazardSignals += new ArrayBuffer[Bool]
+    }
+    for(((regRead, regWrite, stage), rawSignal) <- regRAWHazards){
+      val readStage = getStage(regRead)
+      Predef.assert(readStage > -1)
+      Predef.assert(stage > readStage)
+      RAWHazardSignals(readStage) += rawSignal
+    }
+
+    for(((memRead, memWrite, stage), rawSignal) <- memRAWHazards){
+      val readStage = getStage(memRead)
+      Predef.assert(readStage > -1)
+      Predef.assert(stage > readStage)
+      RAWHazardSignals(readStage) += rawSignal
+    }
+    //generate no raw signals
+    for(i <- 0 until pipelineLength){
+      var currentStageValid = BoolConst(true, module = top)
+      for(rawSignal <- RAWHazardSignals(i)){
+        currentStageValid = And(currentStageValid, Not(rawSignal, module = top), module = top)
       }
-      if(result.length < maxLen) result += currentWire
-    }*/
-    result
+      Assign(stageNoRAWSignals(i), currentStageValid, module = top)
+    }
+  }
+  
+  def generateStageNoIOBusySignals(): Unit = {
+    //sort IO busy signals by stage
+    val IOBusySignals = new ArrayBuffer[ArrayBuffer[Bool]]
+    for(i <- 0 until pipelineLength){
+      IOBusySignals += new ArrayBuffer[Bool]
+    }
+    for(((decoupledIO, stage), ioBusySignal) <- decoupledIOBusySignals){
+      IOBusySignals(stage) += ioBusySignal
+    }
+    for(((varLatIO, decoupledIO, stage), ioBusySignal) <- varLatIOBusySignals){
+      IOBusySignals(stage) += ioBusySignal
+    }
+    
+    //generate noIOBusy Signals
+    for(i <- 0 until pipelineLength){
+      var currentStageValid = BoolConst(true, module = top)
+      for(ioBusySignal <- IOBusySignals(i)){
+        currentStageValid = And(currentStageValid, Not(ioBusySignal, module = top), module = top)
+      }
+      Assign(stageNoIOBusySignals(i), currentStageValid, module = top)
+    }
+
+  }
+
+  def generateStageValidSignals(): Unit = {
+    for(i <- 0 until pipelineLength){
+      var currentStageValid = BoolConst(true, module = top)
+      currentStageValid = And(currentStageValid, prevStageValidRegs(i), module = top)
+
+      currentStageValid = And(currentStageValid, And(stageNoRAWSignals(i) , stageNoIOBusySignals(i), module = top) , module = top)
+      Assign(stageValids(i), currentStageValid, module = top)
+    }
   }
  
+  def generateStageStallSignals(): Unit = {
+    Assign(stageStalls(pipelineLength - 1), BoolConst(false, module = top), module = top)
+    for(i <- 0 until pipelineLength - 1){
+      val currentStageStall = Or(stageStalls(i+1), And(prevStageValidRegs(i + 1), Or(Not(stageNoRAWSignals(i + 1), module = top), Not(stageNoIOBusySignals(i + 1), module = top) , module = top) , module = top), module = top)
+      Assign(stageStalls(i), currentStageStall, module = top)
+    }
+  }
+  
+  def connectStageValidsToConsumers(): Unit = {
+    //and stage valids to architectural state write enables
+    for(reg <- ArchitecturalRegs){
+      val writeStage = getStage(reg.writePorts(0))
+      Predef.assert(writeStage > -1)
+      for(writePort <- reg.writePorts){
+        val oldWriteEn = writePort.inputs(0)
+        removeFromConsumers(oldWriteEn, writePort)
+        val newWriteEn = And(oldWriteEn.asInstanceOf[Bool], stageValids(writeStage), module = top)
+        writePort.inputs(0) = newWriteEn
+        newWriteEn.consumers += ((writePort, 0))
+      }
+    }
+
+    for(mem <- ArchitecturalMems){
+      val writeStage = getStage(mem.writePorts(0))
+      Predef.assert(writeStage > - 1)
+      for(writePort <- mem.writePorts){
+        val oldWriteEn = writePort.inputs(1)
+        removeFromConsumers(oldWriteEn, writePort)
+        val newWriteEn = And(oldWriteEn.asInstanceOf[Bool], stageValids(writeStage), module = top)
+        writePort.inputs(1) = newWriteEn
+        newWriteEn.consumers += ((writePort, 1))
+      }
+    }
+    //and stage valids to input readies/output valids
+    for(decoupledIO <- ioNodes){
+      val stage = getStage(decoupledIO.bits)
+      Predef.assert(stage > -1)
+      if(decoupledIO.dir == INPUT){
+        val oldReadyInput = insertWireOnInput(decoupledIO.ready, 0)
+        removeFromConsumers(oldReadyInput, decoupledIO.ready)
+        val newReadyInput = And(oldReadyInput.asInstanceOf[Bool], And(stageNoRAWSignals(stage), prevStageValidRegs(stage), module = top), module = top)
+        decoupledIO.ready.inputs(0) = newReadyInput
+        newReadyInput.consumers += ((decoupledIO.ready, 0))
+      } else {
+        val oldValidInput = insertWireOnInput(decoupledIO.valid, 0)
+        removeFromConsumers(oldValidInput, decoupledIO.valid)
+        val newValidInput = And(oldValidInput.asInstanceOf[Bool], And(stageNoRAWSignals(stage), prevStageValidRegs(stage), module = top), module = top)
+        decoupledIO.valid.inputs(0) = newValidInput
+        newValidInput.consumers += ((decoupledIO.valid, 0))
+      }
+    }
+    for(varLatIO <- VarLatIOs){
+      val stage = getStage(varLatIO.req.bits)
+      Predef.assert(stage > - 1)
+      
+      val oldReadyInput = insertWireOnInput(varLatIO.resp.ready, 0)
+      removeFromConsumers(oldReadyInput, varLatIO.resp.ready)
+      val newReadyInput = And(oldReadyInput.asInstanceOf[Bool], And(stageNoRAWSignals(stage), prevStageValidRegs(stage), module = top), module = top)
+      varLatIO.resp.ready.inputs(0) = newReadyInput
+      newReadyInput.consumers += ((varLatIO.resp.ready, 0))
+
+      val oldValidInput = insertWireOnInput(varLatIO.req.valid, 0)
+      removeFromConsumers(oldValidInput, varLatIO.req.valid)
+      val newValidInput = And(oldValidInput.asInstanceOf[Bool], And(stageNoRAWSignals(stage), prevStageValidRegs(stage), module = top), module = top)
+      varLatIO.req.valid.inputs(0) = newValidInput
+      newValidInput.consumers += ((varLatIO.req.valid, 0))
+
+    }
+  }
+
+  def connectStageStallsToConsumers(): Unit = {
+    //and ~stage stalls to architectural state write enables
+    for(reg <- ArchitecturalRegs){
+      val writeStage = getStage(reg.writePorts(0))
+      Predef.assert(writeStage > -1)
+      for(writePort <- reg.writePorts){
+        val oldWriteEn = writePort.inputs(0)
+        removeFromConsumers(oldWriteEn, writePort)
+        val newWriteEn = And(oldWriteEn.asInstanceOf[Bool], Not(stageStalls(writeStage), module = top), module = top)
+        writePort.inputs(0) = newWriteEn
+        newWriteEn.consumers += ((writePort, 0))
+      }
+    }
+
+    for(mem <- ArchitecturalMems){
+      val writeStage = getStage(mem.writePorts(0))
+      Predef.assert(writeStage > - 1)
+      for(writePort <- mem.writePorts){
+        val oldWriteEn = writePort.inputs(1)
+        removeFromConsumers(oldWriteEn, writePort)
+        val newWriteEn = And(oldWriteEn.asInstanceOf[Bool], Not(stageStalls(writeStage), module = top), module = top)
+        writePort.inputs(1) = newWriteEn
+        newWriteEn.consumers += ((writePort, 1))
+      }
+    }
+    //and ~stage stalls to input readies/output valids
+    for(decoupledIO <- ioNodes){
+      val stage = getStage(decoupledIO.bits)
+      Predef.assert(stage > -1)
+      if(decoupledIO.dir == INPUT){
+        val oldReadyInput = insertWireOnInput(decoupledIO.ready, 0)
+        removeFromConsumers(oldReadyInput, decoupledIO.ready)
+        val newReadyInput = And(oldReadyInput.asInstanceOf[Bool], Not(stageStalls(stage), module = top), module = top)
+        decoupledIO.ready.inputs(0) = newReadyInput
+        newReadyInput.consumers += ((decoupledIO.ready, 0))
+      } else {
+        val oldValidInput = insertWireOnInput(decoupledIO.valid, 0)
+        removeFromConsumers(oldValidInput, decoupledIO.valid)
+        val newValidInput = And(oldValidInput.asInstanceOf[Bool], Not(stageStalls(stage), module = top), module = top)
+        decoupledIO.valid.inputs(0) = newValidInput
+        newValidInput.consumers += ((decoupledIO.valid, 0))
+      }
+    }
+    for(varLatIO <- VarLatIOs){
+      val stage = getStage(varLatIO.req.bits)
+      Predef.assert(stage > - 1)
+      
+      val oldReadyInput = insertWireOnInput(varLatIO.resp.ready, 0)
+      removeFromConsumers(oldReadyInput, varLatIO.resp.ready)
+      val newReadyInput = And(oldReadyInput.asInstanceOf[Bool], Not(stageStalls(stage), module = top), module = top)
+      varLatIO.resp.ready.inputs(0) = newReadyInput
+      newReadyInput.consumers += ((varLatIO.resp.ready, 0))
+
+      val oldValidInput = insertWireOnInput(varLatIO.req.valid, 0)
+      removeFromConsumers(oldValidInput, varLatIO.req.valid)
+      val newValidInput = And(oldValidInput.asInstanceOf[Bool], Not(stageStalls(stage), module = top), module = top)
+      varLatIO.req.valid.inputs(0) = newValidInput
+      newValidInput.consumers += ((varLatIO.req.valid, 0))
+    }
+
+    //and ~stage stalls to pipeline register enables
+    for(i <- 0 until pipelineLength - 1){
+      for(pipelineReg <- pipelineRegs(i)){
+        Predef.assert(pipelineReg.writePorts.length == 1)
+        val writePort = pipelineReg.writePorts(0)
+        val writeStage = i
+        val oldWriteEn = writePort.inputs(0)
+        removeFromConsumers(oldWriteEn, writePort)
+        val newWriteEn = And(oldWriteEn.asInstanceOf[Bool], Not(stageStalls(writeStage), module = top), module = top)
+        writePort.inputs(0) = newWriteEn
+        newWriteEn.consumers += ((writePort, 0))
+      }
+    }
+
+    //and ~stage stalls to stage valid register enables
+    for(i <- 1 until pipelineLength){
+      Predef.assert(prevStageValidRegs(i).getReg.writePorts.length == 1)
+      val writePort = prevStageValidRegs(i).getReg.writePorts(0)
+      val writeStage = i - 1
+      val oldWriteEn = writePort.inputs(0)
+      removeFromConsumers(oldWriteEn, writePort)
+      val newWriteEn = And(oldWriteEn.asInstanceOf[Bool], Not(stageStalls(writeStage), module = top), name = "Stage_" + i + "_valid_reg_en", module = top)
+      writePort.inputs(0) = newWriteEn
+      newWriteEn.consumers += ((writePort, 0))
+    }
+  }
+
+  def removeFromConsumers(node: Node, consumerToBeRemoved: Node): Unit = {
+    val newConsumers = new ArrayBuffer[(Node, Int)]
+    for((consumer, index) <- node.consumers){
+      if(consumer != consumerToBeRemoved){
+        newConsumers += ((consumer, index))
+      }
+    }
+    node.consumers.clear()
+    for((consumer, index) <- newConsumers){
+      node.consumers += ((consumer, index))
+    }
+  }
+
   def insertAssignOpsBetweenWires() : Unit = {
     for(node <- top.nodes.filter(_.isInstanceOf[Wire])){
       if(node.inputs.length == 1 && node.inputs(0).isInstanceOf[Wire]){
