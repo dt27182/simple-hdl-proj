@@ -99,7 +99,7 @@ object MuxCase {
     for((en, data) <- mapping){
       Predef.assert(en.isInstanceOf[Bool])
       Predef.assert(default.getClass == data.getClass)
-      output = Mux(en, data, output)
+      output = Mux(en, data, output, module = module)
     }
     return output
   }

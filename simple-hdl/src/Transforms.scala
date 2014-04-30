@@ -9,18 +9,21 @@ import scala.collection.mutable.BitSet
 import IODirection._
 import Direction._
 
-object autoPipeline {
+object autoMultiThread {
   //front end specification variables
   var autoAnnotate = false
   var autoAnnotateStageNum = 0
   var userAnnotatedStages = new HashMap[Node, Int]()
   
+  var numThreads = 1
+  var dynamicInterleave = false
+  
   //node orgranization variables
   var top: Module = null
-  var ArchitecturalRegs: ArrayBuffer[Reg] = null
-  var ArchitecturalMems: ArrayBuffer[Mem] = null
-  var ioNodes: ArrayBuffer[DecoupledIO] = null
-  var VarLatIOs: ArrayBuffer[VarLatIO] = null
+  var architecturalRegs: ArrayBuffer[Reg] = null
+  var architecturalMems: ArrayBuffer[Mem] = null
+  var decoupledIOs: ArrayBuffer[DecoupledIO] = null
+  var varLatIOs: ArrayBuffer[VarLatIO] = null
  
   val regWritePorts = new HashSet[Node] 
   val regReadPorts = new HashSet[Node] 
@@ -37,7 +40,14 @@ object autoPipeline {
   var autoSinkNodes: ArrayBuffer[AutoNode] = null
   
   
-  //logic generation variables
+  //multi-threading variables
+  var decoupledIOCopies: HashMap[DecoupledIO, ArrayBuffer[DecoupledIO]] = null
+  var varLatIOCopies: HashMap[VarLatIO, ArrayBuffer[VarLatIO]] = null
+  var regCopies: HashMap[Reg, ArrayBuffer[Reg]] = null
+  var memCopies: HashMap[Mem, ArrayBuffer[Mem]] = null
+
+  var threadSelIDSignal: Wire = null
+  //hazard logic generation variables
   var nodeToStageMap: HashMap[Node, Int] = null
   
   val regRAWHazards = new HashMap[(RegRead, RegWrite, Int), Bool] //map of (reg read, reg write, write stage) -> RAW signal
@@ -98,6 +108,10 @@ object autoPipeline {
   }
     
   //frontend specification methods
+  def setNumThreads(num: Int) = {
+    numThreads = num
+  }
+  
   def setStageNum(num: Int) = {
     autoAnnotate = true
     autoAnnotateStageNum = num
@@ -156,7 +170,8 @@ object autoPipeline {
     gatherSpecialNodes()
     autoAnnotateStages()
     setPipelineLength(userAnnotatedStages.map(_._2).max + 1)
-    
+    setPipelineWidth()
+
     //find pipeline register placement and insert pipeline registers
     findNodesRequireStage()
     createAutoNodeGraph()
@@ -170,15 +185,24 @@ object autoPipeline {
     autoSourceNodes = null
     autoSinkNodes = null
     
-    //find pipeline hazards and generate hazard resolution logic
-    generateRAWHazardSignals()
-    generateIOBusySignals()
-    generateStageNoRAWSignals()
-    generateStageNoIOBusySignals()
-    generateStageValidSignals()
-    generateStageStallSignals()
-    connectStageValidsToConsumers()
-    connectStageStallsToConsumers()
+    //replicate state elements and IO
+    replicateIO()
+    connectReplicatedIO()
+    replicateState()
+    connectReplicatedState()
+
+    if(dynamicInterleave){
+      //find pipeline hazards and generate hazard resolution logic
+      generateRAWHazardSignals()
+      generateIOBusySignals()
+      generateStageNoRAWSignals()
+      generateStageNoIOBusySignals()
+      generateStageValidSignals()
+      generateStageStallSignals()
+      connectStageValidsToConsumers()
+      connectStageStallsToConsumers()
+    } else {
+    }
     
     //fix up node graph to pass verify in code gen
     insertAssignOpsBetweenWires()
@@ -187,7 +211,7 @@ object autoPipeline {
     top.verify()
   }
 
-  def verifyInitialNodeGraph() : Unit = {
+  private def verifyInitialNodeGraph() : Unit = {
     Predef.assert(top.inputs.length == 0)
     Predef.assert(top.outputs.length == 0)
     for(decoupledIO <- top.decoupledIOs){
@@ -203,45 +227,45 @@ object autoPipeline {
     }
   }
 
-  def gatherSpecialNodes () : Unit = {
+  private def gatherSpecialNodes () : Unit = {
     println("gathering special nodes")
-    ArchitecturalRegs = new ArrayBuffer[Reg]
-    ArchitecturalMems = new ArrayBuffer[Mem]
-    ioNodes = new ArrayBuffer[DecoupledIO]
-    VarLatIOs = new ArrayBuffer[VarLatIO]
+    architecturalRegs = new ArrayBuffer[Reg]
+    architecturalMems = new ArrayBuffer[Mem]
+    decoupledIOs = new ArrayBuffer[DecoupledIO]
+    varLatIOs = new ArrayBuffer[VarLatIO]
     
     //mark architectural registers
     for(superOp <- top.superOps){
       if (superOp.isInstanceOf[Reg]) {
-        ArchitecturalRegs += superOp.asInstanceOf[Reg]
+        architecturalRegs += superOp.asInstanceOf[Reg]
       }
     }
     
     //mark architecural mems
     for(superOp <- top.superOps){
       if (superOp.isInstanceOf[Mem]) {
-        ArchitecturalMems += superOp.asInstanceOf[Mem]
+        architecturalMems += superOp.asInstanceOf[Mem]
       }
     }
     
     //mark DecoupledIOs
     for(decoupledIO <- top.decoupledIOs){
-      ioNodes += decoupledIO
+      decoupledIOs += decoupledIO
     }
 
     //mark variable latency modules
     for(varLatIO <- top.varLatIOs){
-      VarLatIOs += varLatIO
+      varLatIOs += varLatIO
     }
 
-    for(reg <- ArchitecturalRegs){
+    for(reg <- architecturalRegs){
       regReadPorts += reg.readPort
       for(writePort <- reg.writePorts){
         regWritePorts += writePort
       }
     }
 
-    for(mem <- ArchitecturalMems){
+    for(mem <- architecturalMems){
       for(readPort <- mem.readPorts){
         memReadPorts += readPort
       }
@@ -250,7 +274,7 @@ object autoPipeline {
       }
     }
 
-    for(decoupledIO <- ioNodes){
+    for(decoupledIO <- decoupledIOs){
       if(decoupledIO.dir == INPUT){
         inputNodes += decoupledIO.bits
         outputNodes += decoupledIO.ready
@@ -260,7 +284,7 @@ object autoPipeline {
       }
     }
 
-    for(varLatIO <- VarLatIOs){
+    for(varLatIO <- varLatIOs){
       inputNodes += varLatIO.resp.bits
       outputNodes += varLatIO.resp.ready
       outputNodes += varLatIO.req.valid
@@ -268,10 +292,10 @@ object autoPipeline {
     }
   }
 
-  def autoAnnotateStages() : Unit = {
+  private def autoAnnotateStages() : Unit = {
     //specify read/write point and IO stage numbers if auto annotate is on
     if(autoAnnotate){
-      for(archReg <- ArchitecturalRegs){
+      for(archReg <- architecturalRegs){
         if(!userAnnotatedStages.contains(archReg.readPort)){
           setRegReadStage(archReg, 0)
         }
@@ -279,12 +303,12 @@ object autoPipeline {
           setRegWriteStage(archReg, autoAnnotateStageNum - 1)
         }
       }
-      for(mem <-ArchitecturalMems){
+      for(mem <-architecturalMems){
         if(!userAnnotatedStages.contains(mem.writePorts(0))){
           setMemWriteStage(mem, autoAnnotateStageNum - 1)
         }
       }
-      for(decoupledIO <- ioNodes){
+      for(decoupledIO <- decoupledIOs){
         if(decoupledIO.dir == OUTPUT){
           if(!userAnnotatedStages.contains(decoupledIO.bits)){
             setOutputDecoupledIOStage(decoupledIO, autoAnnotateStageNum - 1)
@@ -294,7 +318,7 @@ object autoPipeline {
     }
   }
 
-  def setPipelineLength (length: Int) = {
+  private def setPipelineLength (length: Int) = {
     pipelineLength = length
     for (i <- 0 until pipelineLength - 1) {
       pipelineRegs += (i -> new ArrayBuffer[Reg]())
@@ -332,7 +356,12 @@ object autoPipeline {
       stageNoIOBusySignals += noIOBusy
     }
   }
-  def findNodesRequireStage() : Unit = {
+  
+  private def setPipelineWidth() : Unit = {
+    threadSelIDSignal = Wire("thread_sel_id", log2Up(numThreads), top)
+  }
+  
+  private def findNodesRequireStage() : Unit = {
     //mark nodes reachable from sourceNodes through the consumer pointer as requiring a stage number
     val bfsQueue = new ScalaQueue[Node]
     val visited = new HashSet[Node]
@@ -361,14 +390,14 @@ object autoPipeline {
     }
   }
 
-  def createAutoNodeGraph() : Unit = {
+  private def createAutoNodeGraph() : Unit = {
     val nodeToAutoNodeMap = new HashMap[Node, AutoNode]
     autoNodeGraph = new ArrayBuffer[AutoNode]
     autoSourceNodes = new ArrayBuffer[AutoNode]
     autoSinkNodes = new ArrayBuffer[AutoNode]
 
     //create AutoLogic nodes for all chisel nodes that require a stage
-    for(reg <- ArchitecturalRegs){
+    for(reg <- architecturalRegs){
       val readPoint = new AutoLogic
       readPoint.name = reg.name
       readPoint.isSource = true
@@ -390,7 +419,7 @@ object autoPipeline {
       autoSinkNodes += writePoint
     }
 
-    for(mem <- ArchitecturalMems){
+    for(mem <- architecturalMems){
       val readPoint = new AutoLogic
       readPoint.name = mem.name + "_readports"
       readPoint.delay = 5.0
@@ -418,7 +447,7 @@ object autoPipeline {
       autoSinkNodes += writePoint
     }
 
-    for(varLatIO <- VarLatIOs){
+    for(varLatIO <- varLatIOs){
       val varLatIONode = new AutoLogic
       varLatIONode.name = varLatIO.name
       varLatIONode.delay = 5.0
@@ -442,7 +471,7 @@ object autoPipeline {
       autoNodeGraph += varLatIONode 
     }
     
-    for(decoupledIO <- ioNodes){
+    for(decoupledIO <- decoupledIOs){
       val ioNode = new AutoLogic
       ioNode.name = decoupledIO.name
       ioNode.isDecoupledIO = true
@@ -555,7 +584,7 @@ object autoPipeline {
     }
   }
   
-  def propagateStages() : Unit = {
+  private def propagateStages() : Unit = {
     val bfsQueue = new ScalaQueue[(AutoNode, Direction)] //the 2nd item of the tuple indicateds which direction the node should propagate its stage number to. True means propagate to outputs, false means propagate to inputs
     val retryNodes = new ArrayBuffer[(AutoNode, Direction)] //list of nodes that need to retry their stage propagation because their children weren't ready
   
@@ -729,7 +758,7 @@ object autoPipeline {
   }
 
   
-  def optimizeRegisterPlacement(): Unit = { 
+  private def optimizeRegisterPlacement(): Unit = { 
     val nodeArrivalTimes = new HashMap[AutoNode, Double]
     val forwardArrivalTimes = new HashMap[AutoNode, Double]
     val backwardArrivalTimes = new HashMap[AutoNode, Double]
@@ -1029,7 +1058,7 @@ object autoPipeline {
     visualizeAutoLogicGraph(backwardArrivalTimes, "bdelays.gv")
   }
   
-  def verifyLegalStageColoring(): Unit  = {
+  private def verifyLegalStageColoring(): Unit  = {
     //add check that no node is both a register read point and a register write point
     
     //check that all nodes have a stage number
@@ -1058,7 +1087,7 @@ object autoPipeline {
     
   }
   
-  def visualizeAutoLogicGraph(autoNodes: ArrayBuffer[AutoNode], fileName: String) = {
+  private def visualizeAutoLogicGraph(autoNodes: ArrayBuffer[AutoNode], fileName: String) = {
     val outFile = new java.io.FileWriter("/home/eecs/wenyu/multithread-transform/" + fileName)
     outFile.write("digraph G {\n")
     outFile.write("graph [rankdir=LR];\n")
@@ -1086,7 +1115,7 @@ object autoPipeline {
     outFile.close
   }
   
-  def visualizeAutoLogicGraph(autoNodeMap: HashMap[AutoNode, _], fileName: String) = {
+  private def visualizeAutoLogicGraph(autoNodeMap: HashMap[AutoNode, _], fileName: String) = {
     val outFile = new java.io.FileWriter("/home/eecs/wenyu/multithread-transform/" + fileName)
     outFile.write("digraph G {\n")
     outFile.write("graph [rankdir=LR];\n")
@@ -1114,7 +1143,7 @@ object autoPipeline {
     outFile.close
   }
 
-  def insertPipelineRegisters() : Unit = {
+  private def insertPipelineRegisters() : Unit = {
     var nameCounter = 0
     nodeToStageMap = new HashMap[Node, Int]
     
@@ -1148,7 +1177,7 @@ object autoPipeline {
   }
 
   //insert additional bit node between *output* and its input specified by *inputNum*
-  def insertWireOnInput[T <: Node](output: T, inputNum: Int): Wire = {
+  private def insertWireOnInput[T <: Node](output: T, inputNum: Int): Wire = {
     var newWire:Wire = null
     val input = output.inputs(inputNum)
     if(output.isInstanceOf[Op]){
@@ -1179,7 +1208,7 @@ object autoPipeline {
   }
 
   //inserts register between *input* and its consumers
-  def insertRegister[T <: Wire] (input: T, name: String) : Wire = {
+  private def insertRegister[T <: Wire] (input: T, name: String) : Wire = {
     var newRegOutput: Wire = null
     if(input.isInstanceOf[Bool]){
       newRegOutput = BoolReg(false, name, input.module)
@@ -1198,7 +1227,135 @@ object autoPipeline {
     return newRegOutput
   }
   
-  def generateRAWHazardSignals() = {
+  private def replicateIO() = {
+    decoupledIOCopies = new HashMap[DecoupledIO, ArrayBuffer[DecoupledIO]]
+    varLatIOCopies = new HashMap[VarLatIO, ArrayBuffer[VarLatIO]]
+    
+    //replicate decoupledIOs
+    for(decoupledIO <- decoupledIOs){
+      decoupledIOCopies(decoupledIO) = new ArrayBuffer[DecoupledIO]
+      decoupledIOCopies(decoupledIO) += decoupledIO
+      for(i <- 1 until numThreads){
+        val copy = DecoupledIO(decoupledIO.name, decoupledIO.dir, decoupledIO.bits.width, top)
+        decoupledIOCopies(decoupledIO) += copy
+        top.decoupledIOs += copy
+      }
+    }
+    
+    //rename decoupledIO copies
+    for(decoupledIO <- decoupledIOs){
+      for(i <- 0 until numThreads){
+        decoupledIOCopies(decoupledIO)(i).name += "_" + i
+      }
+    }
+  
+    //replicate VarLatIOs
+    for(varLatIO <- varLatIOs){
+      varLatIOCopies(varLatIO) = new ArrayBuffer[VarLatIO]
+      varLatIOCopies(varLatIO) += varLatIO
+      for(i <- 1 until numThreads){
+        val copy = VarLatIO(varLatIO.name, varLatIO.req.bits.width, varLatIO.resp.bits.width, top)
+        varLatIOCopies(varLatIO) += copy
+        top.varLatIOs += copy
+      }
+    }
+
+    //rename varLatIO copies
+    for(varLatIO <- varLatIOs){
+      for(i <- 0 until numThreads){
+        varLatIOCopies(varLatIO)(i).name += "_" + i
+      }
+    }
+  }
+  
+  private def connectReplicatedIO() = {
+    //connect copied output wires to the same drivers as the original output wire
+    for(decoupledIO <- decoupledIOs){
+      if(decoupledIO.dir == INPUT){
+        val readyInput = insertWireOnInput(decoupledIO.ready, 0)
+        for(i <- 1 until numThreads){
+          val copy = decoupledIOCopies(decoupledIO)(i)
+          copy.ready.inputs += readyInput
+          readyInput.consumers += ((copy.ready, 0))
+        }
+      } else {
+        val validInput = insertWireOnInput(decoupledIO.valid, 0)
+        val bitsInput = insertWireOnInput(decoupledIO.bits, 0)
+        for(i <- 1 until numThreads){
+          val copy = decoupledIOCopies(decoupledIO)(i)
+          copy.valid.inputs += validInput
+          validInput.consumers += ((copy.valid, 0))
+
+          copy.bits.inputs += bitsInput
+          bitsInput.consumers += ((copy.bits, 0))
+        }
+      }
+    }
+ 
+    for(varLatIO <- varLatIOs){
+      for(i <- 1 until numThreads){
+        val copy = varLatIOCopies(varLatIO)(i)
+        val respReadyInput = insertWireOnInput(varLatIO.resp.ready, 0)
+        copy.resp.ready.inputs += respReadyInput
+        respReadyInput.consumers += ((copy.resp.ready, 0))
+        
+        val reqValidInput = insertWireOnInput(varLatIO.req.valid, 0)
+        val reqBitsInput = insertWireOnInput(varLatIO.req.bits, 0)
+        copy.req.valid.inputs += reqValidInput
+        reqValidInput.consumers += ((copy.req.valid, 0))
+
+        copy.req.bits.inputs += reqBitsInput
+        reqBitsInput.consumers += ((copy.req.bits, 0))
+      }
+    }
+    //put mux infront of copies of input wires, selected by the threadSelID
+    for(decoupledIO <- decoupledIOs){
+      if(decoupledIO.dir == INPUT){
+        val bitsCopies = new ArrayBuffer[Wire]
+        for(i <- 0 until numThreads){
+          bitsCopies += decoupledIOCopies(decoupledIO)(i).bits
+        }
+        insertMuxOnConsumers(decoupledIOCopies(decoupledIO)(0).bits, bitsCopies, threadSelIDSignal, decoupledIO.name + "_bits_mux_out")
+      }
+    }
+
+    for(varLatIO <- varLatIOs){
+      val bitsCopies = new ArrayBuffer[Wire]
+      for(i <- 0 until numThreads){
+        bitsCopies += varLatIOCopies(varLatIO)(i).resp.bits
+      }
+      insertMuxOnConsumers(varLatIOCopies(varLatIO)(0).resp.bits, bitsCopies, threadSelIDSignal, varLatIO.name + "_resp_bits_mux_out")
+    }
+
+  }
+  
+  private def replicateState() = {
+  }
+  
+  private def connectReplicatedState() = {
+  }
+
+  private def insertMuxOnConsumers(node: Wire, copies: ArrayBuffer[Wire], threadSelID: Wire, muxName: String): Unit = {
+    val nodeOldConsumers = new ArrayBuffer[(Node, Int)]
+    for((consumer, inputNum) <- node.consumers){
+      nodeOldConsumers += ((consumer, inputNum))
+    }
+    
+    val muxMapping = new ArrayBuffer[(Wire, Wire)]
+    for(i <- 0 until copies.length){
+      muxMapping += ((Equal(threadSelID, BitsConst(i, width = log2Up(numThreads), module = top), module = top), copies(i)))
+    }
+    
+    //using MuxCase here is a hack, it is much more effiient to directly use the threadSelId as the signal to a large n-way mux
+    val mux = MuxCase(node, muxMapping, muxName, top)
+    for((consumer, inputNum) <- nodeOldConsumers){
+      consumer.inputs(inputNum) = mux
+      mux.consumers += ((consumer, inputNum))
+      removeFromConsumers(node, consumer)
+    }
+  }
+  
+  private def generateRAWHazardSignals() = {
     println("searching for hazards...")
     
     // handshaking stalls from variable latency components; stall entire pipe when data is not readyfor now
@@ -1210,7 +1367,7 @@ object autoPipeline {
 
     // raw stalls
     var raw_counter = 0
-    for (reg <- ArchitecturalRegs) {
+    for (reg <- architecturalRegs) {
       val readStage = getStage(reg.readPort)
       for (writePort <- reg.writePorts){
         val writeEn = writePort.en
@@ -1236,7 +1393,7 @@ object autoPipeline {
     }
     
     // FunMem hazards
-    for (mem <- ArchitecturalMems) {
+    for (mem <- architecturalMems) {
       for(writePort <- mem.writePorts){
         val writeAddr = writePort.addr
         val writeEn = writePort.en
@@ -1279,7 +1436,7 @@ object autoPipeline {
     }
   }
    
-  def getVersions(wire: Wire, maxLen: Int): ArrayBuffer[Wire] = {
+  private def getVersions(wire: Wire, maxLen: Int): ArrayBuffer[Wire] = {
     val result = new ArrayBuffer[Wire]//stage of node decreases as the array index increases; includes original node
     var currentWire:Node = wire
     result += currentWire.asInstanceOf[Wire]
@@ -1303,8 +1460,8 @@ object autoPipeline {
     return result
   }
   
-  def generateIOBusySignals(): Unit = {
-    for(decoupledIO <- ioNodes){
+  private def generateIOBusySignals(): Unit = {
+    for(decoupledIO <- decoupledIOs){
       val stage = getStage(decoupledIO.bits)
       Predef.assert(stage > -1)
       if(decoupledIO.dir == INPUT){
@@ -1316,7 +1473,7 @@ object autoPipeline {
 
       }
     }
-    for(varLatIO <- VarLatIOs){
+    for(varLatIO <- varLatIOs){
       val stage = getStage(varLatIO.req.bits)
       Predef.assert(stage > -1)
       
@@ -1330,7 +1487,7 @@ object autoPipeline {
     }
   }
   
-  def generateStageNoRAWSignals(): Unit = {
+  private def generateStageNoRAWSignals(): Unit = {
     //sort RAW hazard signals by stage
     val RAWHazardSignals = new ArrayBuffer[ArrayBuffer[Bool]]
     for(i <- 0 until pipelineLength){
@@ -1359,7 +1516,7 @@ object autoPipeline {
     }
   }
   
-  def generateStageNoIOBusySignals(): Unit = {
+  private def generateStageNoIOBusySignals(): Unit = {
     //sort IO busy signals by stage
     val IOBusySignals = new ArrayBuffer[ArrayBuffer[Bool]]
     for(i <- 0 until pipelineLength){
@@ -1383,7 +1540,7 @@ object autoPipeline {
 
   }
 
-  def generateStageValidSignals(): Unit = {
+  private def generateStageValidSignals(): Unit = {
     for(i <- 0 until pipelineLength){
       var currentStageValid = BoolConst(true, module = top)
       currentStageValid = And(currentStageValid, prevStageValidRegs(i), module = top)
@@ -1393,7 +1550,7 @@ object autoPipeline {
     }
   }
  
-  def generateStageStallSignals(): Unit = {
+  private def generateStageStallSignals(): Unit = {
     Assign(stageStalls(pipelineLength - 1), BoolConst(false, module = top), module = top)
     for(i <- 0 until pipelineLength - 1){
       val currentStageStall = Or(stageStalls(i+1), And(prevStageValidRegs(i + 1), Or(Not(stageNoRAWSignals(i + 1), module = top), Not(stageNoIOBusySignals(i + 1), module = top) , module = top) , module = top), module = top)
@@ -1401,9 +1558,9 @@ object autoPipeline {
     }
   }
   
-  def connectStageValidsToConsumers(): Unit = {
+  private def connectStageValidsToConsumers(): Unit = {
     //and stage valids to architectural state write enables
-    for(reg <- ArchitecturalRegs){
+    for(reg <- architecturalRegs){
       val writeStage = getStage(reg.writePorts(0))
       Predef.assert(writeStage > -1)
       for(writePort <- reg.writePorts){
@@ -1415,7 +1572,7 @@ object autoPipeline {
       }
     }
 
-    for(mem <- ArchitecturalMems){
+    for(mem <- architecturalMems){
       val writeStage = getStage(mem.writePorts(0))
       Predef.assert(writeStage > - 1)
       for(writePort <- mem.writePorts){
@@ -1427,7 +1584,7 @@ object autoPipeline {
       }
     }
     //and stage valids to input readies/output valids
-    for(decoupledIO <- ioNodes){
+    for(decoupledIO <- decoupledIOs){
       val stage = getStage(decoupledIO.bits)
       Predef.assert(stage > -1)
       if(decoupledIO.dir == INPUT){
@@ -1444,7 +1601,7 @@ object autoPipeline {
         newValidInput.consumers += ((decoupledIO.valid, 0))
       }
     }
-    for(varLatIO <- VarLatIOs){
+    for(varLatIO <- varLatIOs){
       val stage = getStage(varLatIO.req.bits)
       Predef.assert(stage > - 1)
       
@@ -1463,9 +1620,9 @@ object autoPipeline {
     }
   }
 
-  def connectStageStallsToConsumers(): Unit = {
+  private def connectStageStallsToConsumers(): Unit = {
     //and ~stage stalls to architectural state write enables
-    for(reg <- ArchitecturalRegs){
+    for(reg <- architecturalRegs){
       val writeStage = getStage(reg.writePorts(0))
       Predef.assert(writeStage > -1)
       for(writePort <- reg.writePorts){
@@ -1477,7 +1634,7 @@ object autoPipeline {
       }
     }
 
-    for(mem <- ArchitecturalMems){
+    for(mem <- architecturalMems){
       val writeStage = getStage(mem.writePorts(0))
       Predef.assert(writeStage > - 1)
       for(writePort <- mem.writePorts){
@@ -1489,7 +1646,7 @@ object autoPipeline {
       }
     }
     //and ~stage stalls to input readies/output valids
-    for(decoupledIO <- ioNodes){
+    for(decoupledIO <- decoupledIOs){
       val stage = getStage(decoupledIO.bits)
       Predef.assert(stage > -1)
       if(decoupledIO.dir == INPUT){
@@ -1506,7 +1663,7 @@ object autoPipeline {
         newValidInput.consumers += ((decoupledIO.valid, 0))
       }
     }
-    for(varLatIO <- VarLatIOs){
+    for(varLatIO <- varLatIOs){
       val stage = getStage(varLatIO.req.bits)
       Predef.assert(stage > - 1)
       
@@ -1550,7 +1707,7 @@ object autoPipeline {
     }
   }
 
-  def removeFromConsumers(node: Node, consumerToBeRemoved: Node): Unit = {
+  private def removeFromConsumers(node: Node, consumerToBeRemoved: Node): Unit = {
     val newConsumers = new ArrayBuffer[(Node, Int)]
     for((consumer, index) <- node.consumers){
       if(consumer != consumerToBeRemoved){
@@ -1563,7 +1720,7 @@ object autoPipeline {
     }
   }
 
-  def insertAssignOpsBetweenWires() : Unit = {
+  private def insertAssignOpsBetweenWires() : Unit = {
     for(node <- top.nodes.filter(_.isInstanceOf[Wire])){
       if(node.inputs.length == 1 && node.inputs(0).isInstanceOf[Wire]){
         Predef.assert(node.inputs(0).getClass == node.getClass)
