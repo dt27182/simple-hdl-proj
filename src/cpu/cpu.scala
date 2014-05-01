@@ -26,12 +26,11 @@ class Cpu(par: Module = Module.currentModule, name: String = "") extends Module(
   val pcSpec = Plus(pcReg, BitsConst(1, 4), "pcSpec")
   val pcPlus4 = Plus(pcReg, BitsConst(1, 4), "pcPlus4")
   
-  Assign(imemPort.req.valid, BoolConst(true))
-  Assign(imemPort.req.bits, pcReg)
+  Assign(imemPort.reqValid, BoolConst(true))
+  Assign(imemPort.reqBits, pcReg)
 
-  Assign(imemPort.resp.ready, BoolConst(true))
   val inst = Wire("inst")
-  Assign(inst, imemPort.resp.bits)
+  Assign(inst, imemPort.respBits)
 
   val rs1 = Extract(inst, 11, 8, "rs1")
   val rs2 = Extract(inst, 7, 4, "rs2")
@@ -80,17 +79,16 @@ class Cpu(par: Module = Module.currentModule, name: String = "") extends Module(
   reqBitWires += memWrite
   reqBitWires += Extract(rs1Data, 9, 0)
   reqBitWires += rs2Data
-  Assign(dmemPort.req.bits, Cat(reqBitWires))
-  Assign(dmemPort.req.valid, Or(isLoad, isStore))
+  Assign(dmemPort.reqBits, Cat(reqBitWires))
+  Assign(dmemPort.reqValid, Or(isLoad, isStore))
   //mem resp setup
-  Assign(dmemPort.resp.ready, isLoad)
-  regfile.addWrite(isLoad, dmemPort.resp.bits, rd)
+  regfile.addWrite(isLoad, dmemPort.respBits, rd)
 
   //must have these at the end of the module declaration
   Module.currentModule = parent
 
   //auto pipelining specification
-  autoMultiThread.setNumThreads(2)
+  autoMultiThread.setNumThreads(4)
   autoMultiThread.setStageNum(4)  
   autoMultiThread.setRegWriteStage(pcReg.getReg, 1)
   autoMultiThread.setStage(pcSpec, 0)
