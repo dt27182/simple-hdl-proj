@@ -101,12 +101,9 @@ abstract class Module(par: Module, name: String) {
     }
     for(varLatIO <- varLatIOs){
       Predef.assert(varLatIO.respPending.inputs.length == 0)
-      Predef.assert(varLatIO.req.ready.inputs.length == 0)
-      Predef.assert(varLatIO.req.valid.consumers.length == 0)
-      Predef.assert(varLatIO.req.bits.consumers.length == 0)
-      Predef.assert(varLatIO.resp.ready.consumers.length == 0)
-      Predef.assert(varLatIO.resp.valid.inputs.length == 0)
-      Predef.assert(varLatIO.resp.bits.inputs.length == 0)
+      Predef.assert(varLatIO.reqValid.consumers.length == 0)
+      Predef.assert(varLatIO.reqBits.consumers.length == 0)
+      Predef.assert(varLatIO.respBits.inputs.length == 0)
     }
   }
 
@@ -125,12 +122,9 @@ abstract class Module(par: Module, name: String) {
       ioNodes += decoupledIO.bits
     }
     for(varLatIO <- varLatIOs){
-      ioNodes += varLatIO.req.ready
-      ioNodes += varLatIO.req.valid
-      ioNodes += varLatIO.req.bits
-      ioNodes += varLatIO.resp.ready
-      ioNodes += varLatIO.resp.valid
-      ioNodes += varLatIO.resp.bits
+      ioNodes += varLatIO.reqValid
+      ioNodes += varLatIO.reqBits
+      ioNodes += varLatIO.respBits
       ioNodes += varLatIO.respPending
     }
     for(node <- nodes){
@@ -180,13 +174,10 @@ abstract class Module(par: Module, name: String) {
       decoupledIO.bits.emissionName = "io." + decoupledIO.name + "." + decoupledIO.bits.name
     }
     for(varLatIO <- varLatIOs){
-      varLatIO.req.ready.emissionName = "io." + varLatIO.name + ".req.ready"
-      varLatIO.req.valid.emissionName = "io." + varLatIO.name + ".req.valid"
-      varLatIO.req.bits.emissionName = "io." + varLatIO.name + ".req.bits"
+      varLatIO.reqValid.emissionName = "io." + varLatIO.name + ".reqValid"
+      varLatIO.reqBits.emissionName = "io." + varLatIO.name + ".reqBits"
     
-      varLatIO.resp.ready.emissionName = "io." + varLatIO.name + ".resp.ready"
-      varLatIO.resp.valid.emissionName = "io." + varLatIO.name + ".resp.valid"
-      varLatIO.resp.bits.emissionName = "io." + varLatIO.name + ".resp.bits"
+      varLatIO.respBits.emissionName = "io." + varLatIO.name + ".respBits"
       varLatIO.respPending.emissionName = "io." + varLatIO.name + ".respPending"
     }
     for(submodule <- children){
@@ -243,7 +234,7 @@ abstract class Module(par: Module, name: String) {
       
     }
     for(varLatIO <- varLatIOs){
-      outFile.write("    var " + varLatIO.name + " = new VarLatIO(" + varLatIO.req.bits.width + ", " + varLatIO.resp.bits.width + ")\n")
+      outFile.write("    var " + varLatIO.name + " = new VarLatIO(" + varLatIO.reqBits.width + ", " + varLatIO.respBits.width + ")\n")
     }
     outFile.write("  }\n")
   }
@@ -319,7 +310,8 @@ abstract class Module(par: Module, name: String) {
           //emit register read port connection
           outFile.write("  " + bitsReg.readPort.consumers(0)._1.emissionName + " := " + bitsReg.emissionName + "\n")
           //emit register write port connections
-          for(writePort <- bitsReg.writePorts){
+          for(i <- 0 until bitsReg.writePorts.length){
+            val writePort = bitsReg.writePorts(i)
             outFile.write("  when(" + writePort.en.emissionName + "){\n")
             outFile.write("    " + bitsReg.emissionName + " := " + writePort.data.emissionName + "\n")
             outFile.write("  }\n")

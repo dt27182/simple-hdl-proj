@@ -8,13 +8,15 @@ object IODirection extends Enumeration {
 
 import IODirection._
 
+abstract class IOCollection
+
 object DecoupledIO {
   def apply(name:String, dir: IODirection, dataWidth: Int, module:Module = Module.currentModule):DecoupledIO = {
     return new DecoupledIO(name, dir, dataWidth, module)
   }
 }
 
-class DecoupledIO(_name:String, _dir: IODirection, _dataWidth: Int, _module:Module = Module.currentModule) {
+class DecoupledIO(_name:String, _dir: IODirection, _dataWidth: Int, _module:Module = Module.currentModule) extends IOCollection{
   //child nodes
   var ready:Bool = Bool("ready", _module)
   var valid:Bool = Bool("valid", _module)

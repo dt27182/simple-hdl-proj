@@ -8,9 +8,10 @@ object VarLatIO {
   }
 }
 
-class VarLatIO(_name:String, _reqDataWidth:Int, _respDataWidth:Int, _module:Module = Module.currentModule) {
-  val req:DecoupledIO = DecoupledIO("req", OUTPUT, _reqDataWidth, _module)
-  val resp:DecoupledIO = DecoupledIO("resp", INPUT, _respDataWidth, _module)
+class VarLatIO(_name:String, _reqDataWidth:Int, _respDataWidth:Int, _module:Module = Module.currentModule) extends IOCollection{
+  val reqValid = Bool("reqValid", _module)
+  val reqBits = Wire("reqBits", _reqDataWidth, _module)
+  val respBits = Wire("respBits", _respDataWidth, _module)
   val respPending = Bool("respPending", _module)
   var name = _name
 }
