@@ -101,6 +101,7 @@ object MuxCase {
       Predef.assert(default.getClass == data.getClass)
       output = Mux(en, data, output, module = module)
     }
+    output.name = name
     return output
   }
 }

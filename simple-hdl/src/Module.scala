@@ -21,6 +21,12 @@ abstract class Module(par: Module, name: String) {
   var nonIONodes: ArrayBuffer[Node] = null
   //chisel code gen info
   var instanceName = ""
+  private var wireNameCounter = 0
+
+  private var submoduleNameCounter = 0
+  
+  private var superOpNameCounter = 0
+
   //initializ parent and children pointers
   parent = par
   if(parent != null){
@@ -135,27 +141,24 @@ abstract class Module(par: Module, name: String) {
   }
 
   def nameUnamedCircuitComponents():Unit = {
-    var counter = 0
     for(wire <- nodes.filter(_.isInstanceOf[Wire])){
       if(wire.name == ""){
-        wire.name = "W" + counter
-        counter = counter + 1
+        wire.name = "W" + wireNameCounter
+        wireNameCounter = wireNameCounter + 1
       }
     }
 
-    counter = 0
     for(submodule <- children){
       if(submodule.instanceName == ""){
-        submodule.instanceName = "M" + counter
-        counter = counter + 1
+        submodule.instanceName = "M" + submoduleNameCounter
+        submoduleNameCounter = submoduleNameCounter + 1
       }
     }
   
-    counter = 0
     for(superOp <- superOps){
       if(superOp.name == ""){
-        superOp.name = "SO" + counter
-        counter = counter + 1
+        superOp.name = "SO" + superOpNameCounter
+        superOpNameCounter = superOpNameCounter + 1
       }
     }
   }

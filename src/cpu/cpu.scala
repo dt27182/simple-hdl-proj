@@ -88,8 +88,8 @@ class Cpu(par: Module = Module.currentModule, name: String = "") extends Module(
   Module.currentModule = parent
 
   //auto pipelining specification
-  autoMultiThread.setNumThreads(4)
-  autoMultiThread.setStageNum(4)  
+  autoMultiThread.setNumThreads(2)
+  autoMultiThread.setStageNum(2)  
   autoMultiThread.setRegWriteStage(pcReg.getReg, 1)
   autoMultiThread.setStage(pcSpec, 0)
 }
