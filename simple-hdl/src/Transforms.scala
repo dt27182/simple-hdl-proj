@@ -116,6 +116,10 @@ object autoMultiThread {
     numThreads = num
   }
   
+  def setDynamicInterleave() = {
+    dynamicInterleave = true
+  }
+
   def setStageNum(num: Int) = {
     autoAnnotate = true
     autoAnnotateStageNum = num
@@ -212,14 +216,20 @@ object autoMultiThread {
 
     if(dynamicInterleave){
       //find pipeline hazards and generate hazard resolution logic
+      generateThreadCounter()
+      generatePerStageThreadSelSignals()
       generateRAWHazardSignals()
       generateIOBusySignals()
       generateStageNoRAWSignals()
       generateStageNoIOBusySignals()
       generateStageValidSignalsDynamicInterleave()
       generateStageStallSignalsDynamicInterleave()
+      
       connectStageValidsToConsumersDynamicInterleave()
       connectStageStallsToConsumers()
+      connectThreadSelToWriteEnables()
+      connectThreadSelToIOs()
+      nameArchStateWritePorts()
     } else {
       generateThreadCounter()
       generatePerStageThreadSelSignals() 
@@ -227,6 +237,7 @@ object autoMultiThread {
       generateStageNoIOBusySignals()
       generateStageValidSignalsFixedInterleave()
       generateStageStallSignalsFixedInterleave()
+      
       connectStageValidsToConsumersFixedInterleave()
       connectStageStallsToConsumers()
       connectThreadSelToWriteEnables()
@@ -1446,7 +1457,7 @@ object autoMultiThread {
       for (writePort <- reg.writePorts){
         val writeEn = writePort.en
         val writeData = writePort.data
-        val writeStage = Math.max(getStage(writeEn), getStage(writeData))
+        val writeStage = getStage(writePort)
         Predef.assert(writeStage > -1, "both writeEn and writeData are literals")
         val prevWriteEns = getVersions(writeEn.asInstanceOf[Wire], writeStage - readStage + 1)
         if (writeStage > readStage) {
@@ -1459,7 +1470,7 @@ object autoMultiThread {
             } else {
               currentStageWriteEnable = BoolConst(true, module = top).asInstanceOf[Bool]
             }
-            regRAWHazards(((reg.readPort, writePort, stage))) = And(stageValids(stage), currentStageWriteEnable, "AM_RAW_hazard_" + raw_counter + "_" + reg.name + "_stage_" + stage + "_writeNum_" + reg.writePorts.indexOf(writePort), top).asInstanceOf[Bool]
+            regRAWHazards(((reg.readPort, writePort, stage))) = And(stageValids(stage), And(currentStageWriteEnable, Equal(stageThreadIDs(readStage), stageThreadIDs(stage) , module = top), module = top), "AM_RAW_hazard_" + raw_counter + "_" + reg.name + "_stage_" + stage + "_writeNum_" + reg.writePorts.indexOf(writePort), top).asInstanceOf[Bool]
             raw_counter = raw_counter + 1
           }
         }
@@ -1472,13 +1483,12 @@ object autoMultiThread {
         val writeAddr = writePort.addr
         val writeEn = writePort.en
         val writeData = writePort.data
-        val writeStage = Math.max(getStage(writeEn),Math.max(getStage(writeAddr), getStage(writeData)))
+        val writeStage = getStage(writePort)
         Predef.assert(writeStage > -1)
         for(readPort <- mem.readPorts){
           val readAddr = readPort.addr
-          val readData = readPort.data
           val readEn = readPort.en
-          val readStage = Math.max(getStage(readAddr), getStage(readEn))
+          val readStage = getStage(readPort)
           Predef.assert(readStage > -1)
           val writeEnables = getVersions(writeEn.asInstanceOf[Wire], writeStage - readStage + 1)
           val writeAddrs = getVersions(writeAddr.asInstanceOf[Wire], writeStage - readStage + 1)
@@ -1500,7 +1510,7 @@ object autoMultiThread {
               } else {
                 currentStageWriteAddr = readAddr.asInstanceOf[Wire]
               }
-              memRAWHazards(((readPort, writePort, stage))) = And(stageValids(stage), And(currentStageWriteEnable, And(readEn.asInstanceOf[Bool], Equal(readAddr.asInstanceOf[Wire], currentStageWriteAddr, module = top), module = top), module = top) , name = "AM_RAW_hazard_" + raw_counter + "_" + mem.name + "_readNum_" + mem.readPorts.indexOf(readPort) + "_stage_"+ stage + "_writeNum_" + mem.writePorts.indexOf(writePort), module = top).asInstanceOf[Bool]
+              memRAWHazards(((readPort, writePort, stage))) = And(And(stageValids(stage), Equal(stageThreadIDs(readStage), stageThreadIDs(stage) , module = top) , module = top), And(currentStageWriteEnable, And(readEn.asInstanceOf[Bool], Equal(readAddr.asInstanceOf[Wire], currentStageWriteAddr, module = top), module = top), module = top) , name = "AM_RAW_hazard_" + raw_counter + "_" + mem.name + "_readNum_" + mem.readPorts.indexOf(readPort) + "_stage_"+ stage + "_writeNum_" + mem.writePorts.indexOf(writePort), module = top).asInstanceOf[Bool]
               
               raw_counter = raw_counter + 1
             }
@@ -1742,6 +1752,9 @@ object autoMultiThread {
     }
 
     //and stage 0 valid into thread scheduler register enable
+    for(writePort <- threadCounter.writePorts){
+      andIntoRegWriteEnable(writePort, stageValids(0))
+    }
   }
   
   private def connectStageStallsToConsumers(): Unit = {
