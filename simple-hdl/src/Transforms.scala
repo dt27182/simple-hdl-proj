@@ -217,7 +217,7 @@ object autoMultiThread {
       generateStageNoRAWSignals()
       generateStageNoIOBusySignals()
       generateStageValidSignalsDynamicInterleave()
-      generateStageStallSignals()
+      generateStageStallSignalsDynamicInterleave()
       connectStageValidsToConsumersDynamicInterleave()
       connectStageStallsToConsumers()
     } else {
@@ -226,9 +226,9 @@ object autoMultiThread {
       generateIOBusySignals()
       generateStageNoIOBusySignals()
       generateStageValidSignalsFixedInterleave()
-      generateGlobalStallSignal()
+      generateStageStallSignalsFixedInterleave()
       connectStageValidsToConsumersFixedInterleave()
-      connectGlobalStallToConsumers()
+      connectStageStallsToConsumers()
       connectThreadSelToWriteEnables()
       connectThreadSelToIOs()
       nameArchStateWritePorts()
@@ -1594,6 +1594,7 @@ object autoMultiThread {
     for(i <- 0 until pipelineLength){
       var currentStageValid = BoolConst(true, module = top)
       currentStageValid = And(currentStageValid, prevStageValidRegs(i), module = top)
+      currentStageValid = And(currentStageValid, stageNoIOBusySignals(i), module = top)
       Assign(stageValids(i), currentStageValid, module = top)
     }
   }
@@ -1608,15 +1609,15 @@ object autoMultiThread {
     }
   }
 
-  private def generateGlobalStallSignal(): Unit = {
-    var currentGlobalStall = BoolConst(false, module = top)
-    for(i <- 0 until pipelineLength){
-      currentGlobalStall = Or(currentGlobalStall, Not(stageNoIOBusySignals(i), module = top), module = top)
+  private def generateStageStallSignalsFixedInterleave(): Unit = {
+    Assign(stageStalls(pipelineLength - 1), BoolConst(false, module = top), module = top)
+    for(i <- 0 until pipelineLength - 1){
+      val currentStageStall = Or(stageStalls(i+1), And(prevStageValidRegs(i + 1),  Not(stageNoIOBusySignals(i + 1), module = top) , module = top), module = top)
+      Assign(stageStalls(i), currentStageStall, module = top)
     }
-    Assign(globalStall, currentGlobalStall, module = top)
   }
 
-  private def generateStageStallSignals(): Unit = {
+  private def generateStageStallSignalsDynamicInterleave(): Unit = {
     Assign(stageStalls(pipelineLength - 1), BoolConst(false, module = top), module = top)
     for(i <- 0 until pipelineLength - 1){
       val currentStageStall = Or(stageStalls(i+1), And(prevStageValidRegs(i + 1), Or(Not(stageNoRAWSignals(i + 1), module = top), Not(stageNoIOBusySignals(i + 1), module = top) , module = top) , module = top), module = top)
@@ -1624,7 +1625,6 @@ object autoMultiThread {
     }
   }
  
-    
   private def connectStageValidsToConsumersFixedInterleave(): Unit = {
     //and stage valids to architectural state write enables
     for(reg <- architecturalRegs){
@@ -1648,15 +1648,41 @@ object autoMultiThread {
       val stage = getStage(decoupledIO.bits)
       Predef.assert(stage > -1)
       if(decoupledIO.dir == INPUT){
-        andIntoInputReady(decoupledIO, stageValids(stage))
+        andIntoInputReady(decoupledIO,  prevStageValidRegs(stage))
       } else {
-        andIntoOutputValid(decoupledIO, stageValids(stage))
+        andIntoOutputValid(decoupledIO, prevStageValidRegs(stage))
       }
     }
     for(varLatIO <- varLatIOs){
       val stage = getStage(varLatIO.reqBits)
       Predef.assert(stage > - 1)
-      andIntoVarLatIOReqValid(varLatIO, stageValids(stage))
+      andIntoVarLatIOReqValid(varLatIO, prevStageValidRegs(stage))
+    }
+    //IO busy valid component
+    val ioBusyMap = new ArrayBuffer[ArrayBuffer[ArrayBuffer[(IOCollection, Bool)]]]
+    for(i <- 0 until pipelineLength){
+      ioBusyMap += new ArrayBuffer[ArrayBuffer[(IOCollection, Bool)]]
+      for(j <- 0 until numThreads){
+        ioBusyMap(i) += new ArrayBuffer[(IOCollection, Bool)]
+      }
+    }
+
+    for(((decoupledIO, stage, threadNum), ioBusySignal) <- decoupledIOBusySignals){
+      ioBusyMap(stage)(threadNum) += ((decoupledIO, ioBusySignal))  
+    }
+    for(((varLatIO, stage, threadNum), ioBusySignal) <- varLatIOBusySignals){
+      ioBusyMap(stage)(threadNum) += ((varLatIO, ioBusySignal))
+    }
+
+    for(i <- 0 until pipelineLength){
+      for(j <- 0 until numThreads){
+        connectIOBusySignalsToIOEnables(ioBusyMap(i)(j))
+      }
+    }
+
+    //and stage 0 valid into thread scheduler register enable
+    for(writePort <- threadCounter.writePorts){
+      andIntoRegWriteEnable(writePort, stageValids(0))
     }
   }
 
@@ -1718,59 +1744,6 @@ object autoMultiThread {
     //and stage 0 valid into thread scheduler register enable
   }
   
-  private def connectGlobalStallToConsumers(): Unit = {
-    //and ~global stalls to architectural state write enables
-    for(reg <- architecturalRegs){
-      for(writePort <- reg.writePorts){
-        andIntoRegWriteEnable(writePort, Not(globalStall, module = top).asInstanceOf[Bool])
-      }
-    }
-
-    //this doesn't support seqread mems
-    for(mem <- architecturalMems){
-      for(writePort <- mem.writePorts){
-        andIntoMemWriteEnable(writePort, Not(globalStall, module = top).asInstanceOf[Bool])
-      }
-    }
-    //and ~global stalls to input readies/output valids
-    val ioBusyMap = new ArrayBuffer[(IOCollection, Bool)]
-    for(((decoupledIO, stage, threadNum), ioBusySignal) <- decoupledIOBusySignals){
-      ioBusyMap += ((decoupledIO, ioBusySignal))  
-    }
-    for(((varLatIO, stage, threadNum), ioBusySignal) <- varLatIOBusySignals){
-      ioBusyMap += ((varLatIO, ioBusySignal))
-    }
-
-    connectIOBusySignalsToIOEnables(ioBusyMap)
-
-    //and ~global stalls to pipeline register enables
-    for(i <- 0 until pipelineLength - 1){
-      for(pipelineReg <- pipelineRegs(i)){
-        Predef.assert(pipelineReg.writePorts.length == 1)
-        val writePort = pipelineReg.writePorts(0)
-        andIntoRegWriteEnable(writePort, Not(globalStall, module = top).asInstanceOf[Bool])
-      }
-    }
-
-    //and ~global stalls to stage valid register enables
-    for(i <- 1 until pipelineLength){
-      Predef.assert(prevStageValidRegs(i).getReg.writePorts.length == 1)
-      val writePort = prevStageValidRegs(i).getReg.writePorts(0)
-      andIntoRegWriteEnable(writePort, Not(globalStall, module = top).asInstanceOf[Bool])
-    }
-
-    //and ~stage stalls to threadSelID register enables
-    for(i <- 1 until pipelineLength){
-      Predef.assert(stageThreadIDs(i).getReg.writePorts.length == 1)
-      val writePort = stageThreadIDs(i).getReg.writePorts(0)
-      andIntoRegWriteEnable(writePort, Not(globalStall, module = top).asInstanceOf[Bool])
-    }
-    //and ~stage0 stall to thread scheduler register enable
-    for(writePort <- threadCounter.writePorts){
-      andIntoRegWriteEnable(writePort, Not(globalStall, module = top).asInstanceOf[Bool])
-    }
-  }
-  
   private def connectStageStallsToConsumers(): Unit = {
     //and ~stage stalls to architectural state write enables
     for(reg <- architecturalRegs){
@@ -1824,8 +1797,16 @@ object autoMultiThread {
     }
 
     //and ~stage stalls to threadSelID register enables
-
+    for(i <- 1 until pipelineLength){
+      Predef.assert(stageThreadIDs(i).getReg.writePorts.length == 1)
+      val writePort = stageThreadIDs(i).getReg.writePorts(0)
+      val writeStage = i - 1
+      andIntoRegWriteEnable(writePort, Not(stageStalls(writeStage), module = top).asInstanceOf[Bool])
+    }
     //and ~stage0 stall to thread scheduler register enable
+    for(writePort <- threadCounter.writePorts){
+      andIntoRegWriteEnable(writePort, Not(stageStalls(0), module = top).asInstanceOf[Bool])
+    }
   }
 
 
