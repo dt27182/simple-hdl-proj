@@ -175,8 +175,9 @@ object autoMultiThread {
   def apply[T <: Module] (_top: T) : Unit = {
     //parse in pipelining specification
     top = _top
-    
     top.nameUnamedCircuitComponents()//generate names for unnamed wires
+
+    visualizeNodeGraph(top.nodes, "initialNodes.gv")
 
     verifyInitialNodeGraph()
     gatherSpecialNodes()
@@ -192,7 +193,9 @@ object autoMultiThread {
     optimizeRegisterPlacement()
     verifyLegalStageColoring()
     insertPipelineRegisters()
-
+    verifyPipelineConfiguration()
+   
+    //garbage collect autoNode stuff
     autoNodeGraph = null
     autoSourceNodes = null
     autoSinkNodes = null
@@ -241,6 +244,8 @@ object autoMultiThread {
 
     //verify that our generated node graph is legal
     top.verify()
+
+    visualizeNodeGraph(top.nodes, "allNodes.gv")
   }
 
   private def verifyInitialNodeGraph() : Unit = {
@@ -1093,8 +1098,6 @@ object autoMultiThread {
   }
   
   private def verifyLegalStageColoring(): Unit  = {
-    //add check that no node is both a register read point and a register write point
-    
     //check that all nodes have a stage number
     for(node <- autoNodeGraph){
       Predef.assert(node.propagatedTo, "progate stages failed to give all nodes a stage number")
@@ -1115,10 +1118,65 @@ object autoMultiThread {
       }
     }
     
-    //check that all architectural register has write points in the same stage and that its write stage >= its read stage
+        //check that all architectural register has write points in the same stage and that its write stage >= its read stage
     
     //check all tmems read and write ports are annotated; data, addr, and enable of each port is in same stage; all read ports are in the same stage; all write ports are in same stage; write ports have stage >= read port stage
     
+  }
+ 
+  private def verifyPipelineConfiguration() : Unit = {
+    //check that if we are using fixed interleave, numThreads >= pipelineLength
+    if(!dynamicInterleave){
+      Predef.assert(numThreads >= pipelineLength)
+    }
+
+    //if we are using dynamic interleave, check that there are no io nodes placed at a stage before a varLatIO node, because if there are io nodes placed at a stage before a varLatIO node, varLatIO nodes can kill transactions that already consumed/produced a token to the IO
+    if(dynamicInterleave){
+      var minDecoupledIOStage = pipelineLength
+      var maxVarLatIOStage = 0
+      for(varLatIO <- varLatIOs){
+        val stage = getStage(varLatIO.respBits)
+        Predef.assert(stage > -1)
+        if(stage > maxVarLatIOStage){
+          maxVarLatIOStage = stage
+        }
+      }
+      for(decoupledIO <- decoupledIOs){
+        val stage = getStage(decoupledIO.bits)
+        Predef.assert(stage > -1)
+        if(stage < minDecoupledIOStage){
+          minDecoupledIOStage = stage
+        }
+      }
+      //Predef.assert(minDecoupledIOStage >= maxVarLatIOStage)
+    }
+
+  }
+ 
+  private def visualizeNodeGraph(nodes: ArrayBuffer[Node], fileName: String) ={
+    val outFile = new java.io.FileWriter("/home/eecs/wenyu/multithread-transform/" + fileName)
+    outFile.write("digraph G {\n")
+    outFile.write("graph [rankdir=LR];\n")
+    var nameEnum = 0
+    val nodeNames = new HashMap[Node, String]
+    for(node <- nodes){
+      var fillColor = "red"
+      outFile.write("n" + nameEnum + " [label=\"" + node.name + " " + """\n""" + "\"" + ", style = filled, fillcolor = " + fillColor + "];\n")
+      nodeNames(node) = "n" + nameEnum
+      nameEnum = nameEnum + 1
+    }
+    for(node <- nodes){
+      if(!(node.inputs.length == 0)){
+        for(input <- node.inputs){
+          if(nodeNames.contains(input)){
+            outFile.write(nodeNames(input) + " -> " + nodeNames(node) + ";\n")
+          }
+        }
+      }
+    }
+    outFile.write("}\n")
+    outFile.close
+
   }
   
   private def visualizeAutoLogicGraph(autoNodes: ArrayBuffer[AutoNode], fileName: String) = {
@@ -1177,6 +1235,7 @@ object autoMultiThread {
     outFile.close
   }
 
+  //inserts pipeline registers and populates nodeToStageMap
   private def insertPipelineRegisters() : Unit = {
     var nameCounter = 0
     nodeToStageMap = new HashMap[Node, Int]
