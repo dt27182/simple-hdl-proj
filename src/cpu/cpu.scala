@@ -90,6 +90,7 @@ class Cpu(par: Module = Module.currentModule, name: String = "") extends Module(
   //auto pipelining specification
   autoMultiThread.setNumThreads(4)
   autoMultiThread.setStageNum(4)  
+  autoMultiThread.setDynamicInterleave()
   //autoMultiThread.setRegWriteStage(pcReg.getReg, 1)
   //autoMultiThread.setStage(pcSpec, 0)
 }
