@@ -2,7 +2,7 @@ run:
 	sbt "project fsm" "run" 
 
 run-cpu:
-	sbt "project cpu" "run" 
+	sbt "project cpu" "run 4 4 1" 
 
 clean:
 	sbt "project fsm" clean

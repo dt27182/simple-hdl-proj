@@ -5,7 +5,7 @@ import scala.collection.mutable._
 import IODirection._
 
 
-class Cpu(par: Module = Module.currentModule, name: String = "") extends Module(par, name) {
+class Cpu(par: Module = Module.currentModule, name: String = "", numThreads:Int = 1, pipelineLength:Int = 1, dynamicInterleave:Boolean = true) extends Module(par, name) {
   //must have this at the beginning of the module declaration
   Module.currentModule = this
   
@@ -88,9 +88,11 @@ class Cpu(par: Module = Module.currentModule, name: String = "") extends Module(
   Module.currentModule = parent
 
   //auto pipelining specification
-  autoMultiThread.setNumThreads(4)
-  autoMultiThread.setStageNum(4)  
-  autoMultiThread.setDynamicInterleave()
+  autoMultiThread.setNumThreads(numThreads)
+  autoMultiThread.setStageNum(pipelineLength)  
+  if(dynamicInterleave){
+    autoMultiThread.setDynamicInterleave()
+  }
   //autoMultiThread.setRegWriteStage(pcReg.getReg, 1)
   //autoMultiThread.setStage(pcSpec, 0)
 }
@@ -99,6 +101,6 @@ class Cpu(par: Module = Module.currentModule, name: String = "") extends Module(
 
 object test {
   def main(args: Array[String]): Unit = {
-    hdlMain(new Cpu(name="top"), "/home/eecs/wenyu/multithread-transform/simple-hdl-proj/generated/cpu-dut.scala", "Cpu")
+    hdlMain(new Cpu(name="top", numThreads = args(0).toInt, pipelineLength = args(1).toInt, dynamicInterleave = args(2) == "1"), "/home/eecs/wenyu/multithread-transform/simple-hdl-proj/generated/Cpu.scala", "Cpu")
   }
 }
