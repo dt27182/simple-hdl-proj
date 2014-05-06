@@ -355,8 +355,6 @@ object autoMultiThread {
   }
 
   private def setPipelineLength (length: Int) = {
-    println("DEBUG0")
-    println(dynamicInterleave)
     println(length)
     pipelineLength = length
     for (i <- 0 until pipelineLength - 1) {
