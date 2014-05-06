@@ -355,6 +355,9 @@ object autoMultiThread {
   }
 
   private def setPipelineLength (length: Int) = {
+    println("DEBUG0")
+    println(dynamicInterleave)
+    println(length)
     pipelineLength = length
     for (i <- 0 until pipelineLength - 1) {
       pipelineRegs += (i -> new ArrayBuffer[Reg]())
@@ -543,10 +546,37 @@ object autoMultiThread {
       if(!nodeToAutoNodeMap.contains(node)){
         val autoNode = new AutoLogic
         autoNode.name = node.name
-        if(node.isInstanceOf[Op]){
-          autoNode.delay = 5.0
-        } else {
-          autoNode.delay = 0.0
+        node match {
+          case plus: PlusOp => {
+            autoNode.delay = 5.0
+          }
+          case minus: MinusOp => {
+            autoNode.delay = 5.0
+          }
+          case equal: EqualOp => {
+            autoNode.delay = 2.0
+          }
+          case nequal: NEqualOp => {
+            autoNode.delay = 2.0
+          }
+          case gt: GTOp => {
+            autoNode.delay = 2.0
+          }
+          case lt: LTOp => {
+            autoNode.delay = 2.0
+          }
+          case cat: CatOp => {
+            autoNode.delay = 0.0
+          }
+          case extract: ExtractOp => {
+            autoNode.delay = 0.0
+          }
+          case op: Op => {
+            autoNode.delay = 1.0
+          }
+          case _ => {
+            autoNode.delay = 0.0
+          }
         }
         autoNode.findStage(node, userAnnotatedStages)
         autoNode.inputChiselNodes += node
